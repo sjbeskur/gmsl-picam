@@ -1,10 +1,32 @@
 # GMSL Pi Camera Notes
 
-This repo now includes an Ubuntu-focused cross-build path for `libcamera`
-artifacts that can be built in Docker and deployed to a Raspberry Pi 5, plus a
-matching kernel-pack workflow for overlays and out-of-tree modules.
+This repo includes an Ubuntu-focused cross-build path for `libcamera` artifacts
+that can be built in Docker and deployed to a Raspberry Pi 5, plus a matching
+kernel-pack workflow for overlays and out-of-tree modules.
 
-Start here:
+The `libcamera` directory is a git submodule pointing to
+[sjbeskur/libcamera-gmsl](https://github.com/sjbeskur/libcamera-gmsl) which
+contains GMSL-specific fixes on top of upstream libcamera.
+
+## Cloning
+
+```bash
+git clone --recurse-submodules git@github.com:sjbeskur/gmsl-picam.git
+```
+
+If you already cloned without `--recurse-submodules`:
+
+```bash
+git submodule update --init --recursive
+```
+
+To pull the latest libcamera fixes after the submodule is updated:
+
+```bash
+git submodule update --remote libcamera
+```
+
+## Guides
 
 - [Ubuntu arm64 cross-build guide](./ubuntu-arm64-cross-build.md)
 - [Repeatable Pi 5 Ubuntu bring-up steps](./pi5-ubuntu-imx477-repeatable-steps.md)

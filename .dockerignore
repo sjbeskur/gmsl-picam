@@ -1,0 +1,5 @@
+.codex
+libcamera/.git
+out/*
+!out/kernel-input/
+!out/kernel-input/pi-kernel-tree.tar.gz
