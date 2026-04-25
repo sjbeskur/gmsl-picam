@@ -101,6 +101,21 @@ gst-launch-1.0 -e -v \
   tcpclientsrc host=192.168.50.24 port=5000 ! \
   multipartdemux ! multifilesink location=frame-%05d.jpg
 ```
+---
+
+**Grayscale:**
+
+```bash
+gst-launch-1.0 -v   libcamerasrc !   'video/x-raw,format=NV12,width=1280,height=720,framerate=30/1' !   queue ! videoconvert !   'video/x-raw,format=GRAY8' !   jpegenc !   multipartmux boundary=spionisto !   tcpserversink host=0.0.0.0 port=5000
+
+```
+
+**Grayscale:**
+
+```bash
+gst-launch-1.0 -v   libcamerasrc !   'video/x-raw,format=NV12,width=1280,height=720,framerate=30/1' !   queue ! videoconvert !   'video/x-raw,format=GRAY8' !   jpegenc !   multipartmux boundary=spionisto !   tcpserversink host=0.0.0.0 port=5000
+```
+
 
 ### Notes
 
