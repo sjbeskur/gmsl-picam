@@ -13,6 +13,8 @@ Ubuntu 24.04 with the cross-built libcamera bundle from this repo.
 sudo /usr/local/bin/cam -c 1 --capture=5 --file=/tmp/frame-#.raw
 ```
 
+![alt text](image.png)
+
 Expected output:
 
 ```
