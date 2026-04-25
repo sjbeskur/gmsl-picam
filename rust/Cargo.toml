@@ -1,0 +1,31 @@
+[package]
+name = "gmsl-picam-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust examples for GMSL IMX477 camera on Raspberry Pi 5"
+
+[dependencies]
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# libcamera direct bindings (example: libcamera_capture)
+libcamera = { version = "0.7", optional = true }
+
+# GStreamer bindings (example: gstreamer_capture)
+gstreamer     = { version = "0.23", optional = true }
+gstreamer-app = { version = "0.23", optional = true }
+gstreamer-video = { version = "0.23", optional = true }
+
+[features]
+default = []
+libcamera-example = ["dep:libcamera"]
+gstreamer-example = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
+
+[[example]]
+name = "libcamera_capture"
+required-features = ["libcamera-example"]
+
+[[example]]
+name = "gstreamer_capture"
+required-features = ["gstreamer-example"]
