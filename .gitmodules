@@ -1,0 +1,3 @@
+[submodule "libcamera"]
+	path = libcamera
+	url = git@github.com:sjbeskur/libcamera-gmsl.git

@@ -1,0 +1,5 @@
+out/
+*.raw
+csi2:*
+pisp-fe:*
+rp1-cfe-*
