@@ -8,6 +8,13 @@ description = "Rust examples for GMSL IMX477 camera on Raspberry Pi 5"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum = { version = "0.7", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"], optional = true }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 
 # libcamera direct bindings (example: libcamera_capture)
 libcamera = { version = "0.7", optional = true }
@@ -19,8 +26,23 @@ gstreamer-video = { version = "0.25", optional = true }
 
 [features]
 default = []
+iris-service = [
+    "dep:axum",
+    "dep:clap",
+    "dep:image",
+    "dep:libcamera",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tokio",
+    "dep:tokio-stream",
+]
 libcamera-example = ["dep:libcamera"]
 gstreamer-example = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
+
+[[bin]]
+name = "iris"
+path = "src/bin/iris.rs"
+required-features = ["iris-service"]
 
 [[example]]
 name = "libcamera_capture"
