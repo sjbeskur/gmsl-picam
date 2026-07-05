@@ -13,9 +13,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libcamera = { version = "0.7", optional = true }
 
 # GStreamer bindings (example: gstreamer_capture)
-gstreamer     = { version = "0.23", optional = true }
-gstreamer-app = { version = "0.23", optional = true }
-gstreamer-video = { version = "0.23", optional = true }
+gstreamer     = { version = "0.25", optional = true }
+gstreamer-app = { version = "0.25", optional = true }
+gstreamer-video = { version = "0.25", optional = true }
 
 [features]
 default = []
