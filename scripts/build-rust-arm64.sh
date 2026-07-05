@@ -5,7 +5,7 @@
 #   ./scripts/build-rust-arm64.sh [output-dir]
 #
 # Default output: out/rust-arm64/
-# Binaries produced: libcamera_capture  gstreamer_capture
+# Binaries produced: iris  libcamera_capture  gstreamer_capture
 #
 # Prerequisites:
 #   The libcamera arm64 tarball must exist at out/libcamera-arm64/.
@@ -63,9 +63,11 @@ echo "Done. Binaries in ${output_dir}:"
 ls -lh "${output_dir}"
 echo ""
 echo "Deploy to Pi:"
+echo "  scp ${output_dir}/iris sbeskur@192.168.50.24:/tmp/"
 echo "  scp ${output_dir}/libcamera_capture sbeskur@192.168.50.24:/tmp/"
 echo "  scp ${output_dir}/gstreamer_capture sbeskur@192.168.50.24:/tmp/"
 echo ""
 echo "Run on Pi:"
+echo "  sudo /tmp/iris --bind 0.0.0.0:8080 --width 1280 --height 720"
 echo "  sudo /tmp/libcamera_capture --frames 10 --exposure-us 8000"
 echo "  GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 /tmp/gstreamer_capture --frames 30"
