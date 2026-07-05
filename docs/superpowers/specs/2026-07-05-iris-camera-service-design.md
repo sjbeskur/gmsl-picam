@@ -143,10 +143,12 @@ pixel_format
 captured_at timestamp
 ```
 
-The current center-of-integration helper is not correct for a center-frame
-timestamp because it only subtracts half exposure from the end-of-readout sensor
-timestamp. This work should fix the timing helper before exposing `coi_ns` from
-`iris`.
+The timing helpers must use libcamera's `SensorTimestamp` definition: the time
+when the first row of the image sensor active array is exposed. A first-row CoI
+is `sensor_ts_ns + exposure_ns / 2`; a frame-center CoI also adds half the
+rolling readout duration. This work should preserve the existing
+`center_of_integration_ns` symbol as a first-row compatibility helper and expose
+the corrected frame-center value from `iris`.
 
 ## Error Handling
 

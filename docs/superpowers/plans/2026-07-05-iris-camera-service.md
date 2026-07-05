@@ -172,11 +172,12 @@ Create `rust/src/timing.rs` with tests and stubs:
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimingError {
     InvalidFrameHeight,
+    InvalidRow,
     ExposureLongerThanFrame,
 }
 
-pub fn center_of_integration_last_row_ns(sensor_ts_ns: i64, exposure_us: i32) -> i64 {
-    sensor_ts_ns - (exposure_us as i64 * 1_000 / 2)
+pub fn center_of_integration_ns(sensor_ts_ns: i64, exposure_us: i32) -> i64 {
+    sensor_ts_ns + (exposure_us as i64 * 1_000 / 2)
 }
 
 pub fn center_of_integration_frame_center_ns(
@@ -202,17 +203,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_center_subtracts_half_exposure_and_half_readout() {
+    fn frame_center_adds_half_exposure_and_half_readout() {
         let coi = center_of_integration_frame_center_ns(1_000_000_000, 8_000, 33_333)
             .expect("valid timing");
-        assert_eq!(coi, 983_333_500);
+        assert_eq!(coi, 1_016_666_500);
     }
 
     #[test]
-    fn row_zero_subtracts_full_readout() {
+    fn row_zero_is_first_row_center_of_integration() {
         let coi = center_of_integration_row_ns(1_000_000_000, 8_000, 33_333, 0, 720)
             .expect("valid timing");
-        assert_eq!(coi, 970_667_000);
+        assert_eq!(coi, 1_004_000_000);
     }
 
     #[test]
@@ -233,10 +234,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_row_at_frame_height() {
+        assert_eq!(
+            center_of_integration_row_ns(1_000_000_000, 8_000, 33_333, 720, 720),
+            Err(TimingError::InvalidRow)
+        );
+    }
+
+    #[test]
     fn rejects_exposure_longer_than_frame() {
         assert_eq!(
             center_of_integration_frame_center_ns(1_000_000_000, 40_000, 33_333),
             Err(TimingError::ExposureLongerThanFrame)
+        );
+    }
+
+    #[test]
+    fn compatibility_helper_returns_first_row_center_of_integration() {
+        assert_eq!(
+            center_of_integration_ns(1_000_000_000, 8_000),
+            1_004_000_000
         );
     }
 }
@@ -250,7 +267,7 @@ Replace `rust/src/lib.rs` with:
 pub mod timing;
 
 pub use timing::{
-    center_of_integration_frame_center_ns, center_of_integration_last_row_ns,
+    center_of_integration_frame_center_ns, center_of_integration_ns,
     center_of_integration_row_ns, TimingError,
 };
 ```
@@ -281,7 +298,7 @@ pub fn center_of_integration_frame_center_ns(
         return Err(TimingError::ExposureLongerThanFrame);
     }
     let readout_ns = frame_duration_ns - exposure_ns;
-    Ok(sensor_ts_ns - exposure_ns / 2 - readout_ns / 2)
+    Ok(sensor_ts_ns + exposure_ns / 2 + readout_ns / 2)
 }
 
 pub fn center_of_integration_row_ns(
@@ -294,6 +311,9 @@ pub fn center_of_integration_row_ns(
     if frame_height == 0 {
         return Err(TimingError::InvalidFrameHeight);
     }
+    if row >= frame_height {
+        return Err(TimingError::InvalidRow);
+    }
     let exposure_ns = exposure_us as i64 * 1_000;
     let frame_duration_ns = frame_duration_us * 1_000;
     if exposure_ns > frame_duration_ns {
@@ -301,7 +321,7 @@ pub fn center_of_integration_row_ns(
     }
     let readout_ns = frame_duration_ns - exposure_ns;
     let row_offset_ns = row as i64 * readout_ns / frame_height as i64;
-    Ok(sensor_ts_ns - exposure_ns / 2 - readout_ns + row_offset_ns)
+    Ok(sensor_ts_ns + exposure_ns / 2 + row_offset_ns)
 }
 ```
 
@@ -1088,7 +1108,7 @@ mod tests {
     #[test]
     fn metadata_computes_coi_when_values_exist() {
         let metadata = metadata_from_values(0, Some(1_000_000_000), Some(8_000), Some(1.0), 1280, 720, 33_333);
-        assert_eq!(metadata.coi_ns, Some(983_333_500));
+        assert_eq!(metadata.coi_ns, Some(1_016_666_500));
     }
 }
 ```
