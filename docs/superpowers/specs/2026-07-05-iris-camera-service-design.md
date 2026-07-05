@@ -169,12 +169,19 @@ Runtime behavior:
 
 Cross-compilation is part of the PoC definition of done.
 
-The existing build path should produce `iris` for arm64:
+The project should use a root `justfile` as the canonical developer command
+surface. Existing scripts can remain as implementation details while the workflow
+is migrated.
+
+Primary commands:
 
 ```bash
-./scripts/build-libcamera-arm64.sh
-./scripts/build-rust-arm64.sh
+just build-libcamera
+just build-rust
 ```
+
+The Rust build recipe should produce `iris` for arm64 using the existing Docker
+cross-build path.
 
 Expected Rust artifacts:
 
@@ -184,12 +191,26 @@ out/rust-arm64/libcamera_capture
 out/rust-arm64/gstreamer_capture
 ```
 
+Legacy script commands should continue to work during the transition:
+
+```bash
+./scripts/build-libcamera-arm64.sh
+./scripts/build-rust-arm64.sh
+```
+
+Useful `just` recipes for this work:
+
+```text
+just build-libcamera
+just build-rust
+just deploy-iris host=192.168.50.24
+just pi-camera-check host=192.168.50.24
+```
+
 Pi deployment:
 
 ```bash
-scp out/rust-arm64/iris sbeskur@192.168.50.24:/tmp/
-ssh sbeskur@192.168.50.24
-sudo /tmp/iris --bind 0.0.0.0:8080 --width 1280 --height 720
+just deploy-iris host=192.168.50.24
 ```
 
 Local host builds should remain useful where practical, but the real verification
