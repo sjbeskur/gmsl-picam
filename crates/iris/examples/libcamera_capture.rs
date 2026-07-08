@@ -1,6 +1,6 @@
 /// Example: direct libcamera capture with manual exposure and center-of-integration timing.
 ///
-/// Build:  cargo build --example libcamera_capture --features libcamera-example
+/// Build:  cargo build --manifest-path crates/iris/Cargo.toml --example libcamera_capture --features libcamera-example
 /// Run:    sudo ./target/debug/examples/libcamera_capture --frames 10 --exposure-us 8000
 ///
 /// The binary must run as root (or a user in the `video` group with access to
@@ -11,7 +11,6 @@ use libcamera::{
     camera::CameraConfigurationStatus,
     camera_manager::CameraManager,
     controls,
-    framebuffer::AsFrameBuffer,
     framebuffer_allocator::{FrameBuffer, FrameBufferAllocator},
     framebuffer_map::MemoryMappedFrameBuffer,
     geometry::Size,
@@ -40,7 +39,10 @@ fn main() -> Result<()> {
     let width: u32 = arg_value(&args, "--width").unwrap_or(1280);
     let height: u32 = arg_value(&args, "--height").unwrap_or(720);
 
-    info!(n_frames, exposure_us, gain, width, height, "Starting libcamera capture");
+    info!(
+        n_frames,
+        exposure_us, gain, width, height, "Starting libcamera capture"
+    );
 
     let mgr = CameraManager::new().context("Failed to create CameraManager")?;
     let cameras = mgr.cameras();
@@ -115,7 +117,9 @@ fn main() -> Result<()> {
         .into_iter()
         .enumerate()
         .map(|(i, buf)| {
-            let mut req = cam.create_request(Some(i as u64)).expect("create_request failed");
+            let mut req = cam
+                .create_request(Some(i as u64))
+                .expect("create_request failed");
             req.add_buffer(&stream, buf).expect("add_buffer failed");
             req
         })
@@ -124,7 +128,8 @@ fn main() -> Result<()> {
     // Disable AE and apply manual exposure on request 0.
     {
         let ctrls = requests[0].controls_mut();
-        ctrls.set(controls::AeEnable(false)).ok();
+        ctrls.set(controls::ExposureTimeMode::Manual).ok();
+        ctrls.set(controls::AnalogueGainMode::Manual).ok();
         ctrls.set(controls::ExposureTime(exposure_us)).ok();
         ctrls.set(controls::AnalogueGain(gain)).ok();
         // Clamp frame duration so the sensor doesn't stretch the frame period.
@@ -137,7 +142,9 @@ fn main() -> Result<()> {
     cam.start(None).context("camera start() failed")?;
 
     for req in requests.drain(..) {
-        cam.queue_request(req).map_err(|(_, e)| e).context("queue_request failed")?;
+        cam.queue_request(req)
+            .map_err(|(_, e)| e)
+            .context("queue_request failed")?;
     }
 
     // --- Capture loop ---
@@ -166,11 +173,7 @@ fn main() -> Result<()> {
 
         info!(
             frame = frame_idx,
-            sensor_ts_ns,
-            coi_ns,
-            actual_exposure_us,
-            actual_gain,
-            "Frame received"
+            sensor_ts_ns, coi_ns, actual_exposure_us, actual_gain, "Frame received"
         );
 
         // Access raw pixel data from the memory-mapped Y plane (NV12 plane 0).
@@ -185,7 +188,9 @@ fn main() -> Result<()> {
 
         if frame_idx < n_frames {
             req.reuse(ReuseFlag::REUSE_BUFFERS);
-            cam.queue_request(req).map_err(|(_, e)| e).context("re-queue failed")?;
+            cam.queue_request(req)
+                .map_err(|(_, e)| e)
+                .context("re-queue failed")?;
         }
     }
 

@@ -21,9 +21,9 @@ pub fn center_of_integration_frame_center_ns(
 ) -> Result<i64, TimingError> {
     let exposure_ns = exposure_us as i64 * 1_000;
     let frame_duration_ns = frame_duration_us * 1_000;
-    let readout_ns = readout_ns(exposure_ns, frame_duration_ns)?;
+    ensure_valid_duration(exposure_ns, frame_duration_ns)?;
 
-    Ok(sensor_ts_ns + exposure_ns / 2 + readout_ns / 2)
+    Ok(sensor_ts_ns + exposure_ns / 2 + frame_duration_ns / 2)
 }
 
 pub fn center_of_integration_row_ns(
@@ -42,18 +42,18 @@ pub fn center_of_integration_row_ns(
 
     let exposure_ns = exposure_us as i64 * 1_000;
     let frame_duration_ns = frame_duration_us * 1_000;
-    let readout_ns = readout_ns(exposure_ns, frame_duration_ns)?;
-    let row_offset_ns = row as i64 * readout_ns / frame_height as i64;
+    ensure_valid_duration(exposure_ns, frame_duration_ns)?;
+    let row_offset_ns = row as i64 * frame_duration_ns / frame_height as i64;
 
     Ok(sensor_ts_ns + exposure_ns / 2 + row_offset_ns)
 }
 
-fn readout_ns(exposure_ns: i64, frame_duration_ns: i64) -> Result<i64, TimingError> {
+fn ensure_valid_duration(exposure_ns: i64, frame_duration_ns: i64) -> Result<(), TimingError> {
     if exposure_ns > frame_duration_ns {
         return Err(TimingError::ExposureLongerThanFrame);
     }
 
-    Ok(frame_duration_ns - exposure_ns)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -61,10 +61,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_center_adds_half_exposure_and_half_readout() {
+    fn frame_center_adds_half_exposure_and_half_frame_duration() {
         let coi = center_of_integration_frame_center_ns(1_000_000_000, 8_000, 33_333)
             .expect("valid timing");
-        assert_eq!(coi, 1_016_666_500);
+        assert_eq!(coi, 1_020_666_500);
     }
 
     #[test]
@@ -80,6 +80,7 @@ mod tests {
             .expect("valid timing");
         let bottom = center_of_integration_row_ns(1_000_000_000, 8_000, 33_333, 719, 720)
             .expect("valid timing");
+        assert_eq!(bottom, 1_037_286_704);
         assert!(bottom > top);
     }
 

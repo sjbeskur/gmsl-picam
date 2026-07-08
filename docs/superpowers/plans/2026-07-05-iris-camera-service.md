@@ -1,5 +1,9 @@
 # Iris Camera Service Implementation Plan
 
+> Note: the implemented Rust workspace now lives under `crates/iris/`. This
+> plan was authored before the repo move, so older path references still say
+> `rust/` and map to that location.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build `iris`, a direct-libcamera Rust camera service that serves `/status`, `/frame.jpg`, and `/stream.mjpg`, and cross-compiles to arm64 through `just build-rust`.
@@ -164,6 +168,11 @@ path = "src/bin/iris.rs"
 required-features = ["iris-service"]
 ```
 
+The implementation may split the helper code into narrower features such as
+`http-support` and `jpeg-support` so unit tests can run without the host
+libcamera development package. `iris-service` remains the umbrella feature for
+the binary.
+
 - [ ] **Step 2: Write timing tests first**
 
 Create `rust/src/timing.rs` with tests and stubs:
@@ -203,10 +212,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_center_adds_half_exposure_and_half_readout() {
+    fn frame_center_adds_half_exposure_and_half_frame_duration() {
         let coi = center_of_integration_frame_center_ns(1_000_000_000, 8_000, 33_333)
             .expect("valid timing");
-        assert_eq!(coi, 1_016_666_500);
+        assert_eq!(coi, 1_020_666_500);
     }
 
     #[test]
@@ -222,6 +231,7 @@ mod tests {
             .expect("valid timing");
         let bottom = center_of_integration_row_ns(1_000_000_000, 8_000, 33_333, 719, 720)
             .expect("valid timing");
+        assert_eq!(bottom, 1_037_286_704);
         assert!(bottom > top);
     }
 
@@ -297,8 +307,7 @@ pub fn center_of_integration_frame_center_ns(
     if exposure_ns > frame_duration_ns {
         return Err(TimingError::ExposureLongerThanFrame);
     }
-    let readout_ns = frame_duration_ns - exposure_ns;
-    Ok(sensor_ts_ns + exposure_ns / 2 + readout_ns / 2)
+    Ok(sensor_ts_ns + exposure_ns / 2 + frame_duration_ns / 2)
 }
 
 pub fn center_of_integration_row_ns(
@@ -319,8 +328,7 @@ pub fn center_of_integration_row_ns(
     if exposure_ns > frame_duration_ns {
         return Err(TimingError::ExposureLongerThanFrame);
     }
-    let readout_ns = frame_duration_ns - exposure_ns;
-    let row_offset_ns = row as i64 * readout_ns / frame_height as i64;
+    let row_offset_ns = row as i64 * frame_duration_ns / frame_height as i64;
     Ok(sensor_ts_ns + exposure_ns / 2 + row_offset_ns)
 }
 ```
@@ -1108,7 +1116,7 @@ mod tests {
     #[test]
     fn metadata_computes_coi_when_values_exist() {
         let metadata = metadata_from_values(0, Some(1_000_000_000), Some(8_000), Some(1.0), 1280, 720, 33_333);
-        assert_eq!(metadata.coi_ns, Some(1_016_666_500));
+        assert_eq!(metadata.coi_ns, Some(1_020_666_500));
     }
 }
 ```
@@ -1528,8 +1536,8 @@ Add to `rust/README.md`:
 ````markdown
 ### `iris` - camera service
 
-`iris` is the direct-libcamera service binary. It captures from the first
-enumerated IMX477 camera and serves:
+`iris` is the direct-libcamera service binary. It captures from the selected
+IMX477 camera at startup and serves:
 
 - `GET /status`
 - `GET /frame.jpg`
@@ -1540,6 +1548,13 @@ Cross-build from the repository root:
 ```bash
 just build-rust
 ```
+
+Current working baseline on the Pi uses manual exposure around `59000 us` with
+`--gain 1.0`. Requests above that exposure currently time out in the camera
+frontend, so gain is the remaining brightness knob for now.
+
+If two cameras are connected, run one `iris` process per camera on different
+ports and set `--camera-index` explicitly for each process.
 ````
 
 - [ ] **Step 3: Deploy to Pi**
@@ -1567,10 +1582,10 @@ Expected: one `imx477` camera listed and media graph includes `imx477 10-001a`.
 Run on the Pi:
 
 ```bash
-sudo /tmp/iris --bind 0.0.0.0:8080 --width 1280 --height 720
+sudo /tmp/iris --bind 0.0.0.0:8080 --camera-index 0 --width 1280 --height 720 --exposure-us 59000 --gain 1.0
 ```
 
-Expected: logs show `iris listening on http://0.0.0.0:8080` and captured frames.
+Expected: logs show `iris listening` with the selected camera index and captured frames.
 
 - [ ] **Step 6: Check service from host**
 

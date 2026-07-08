@@ -15,7 +15,7 @@ Gives access to raw `SensorTimestamp` metadata, enabling precise
 center-of-integration (CoI) timestamps for IMU synchronization.
 
 ```bash
-cargo build --example libcamera_capture --features libcamera-example
+cargo build --manifest-path crates/iris/Cargo.toml --example libcamera_capture --features libcamera-example
 
 sudo ./target/debug/examples/libcamera_capture \
     --frames 10 \
@@ -51,7 +51,7 @@ pipeline-clock timestamps are less precise than `SensorTimestamp` — use
 `libcamera_capture` when CoI matters.
 
 ```bash
-cargo build --example gstreamer_capture --features gstreamer-example
+cargo build --manifest-path crates/iris/Cargo.toml --example gstreamer_capture --features gstreamer-example
 
 GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
     ./target/debug/examples/gstreamer_capture \
@@ -60,6 +60,43 @@ GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
         --height 720 \
         --exposure-us 8000   # 0 = leave auto-exposure enabled
 ```
+
+### `iris` - camera service
+
+`iris` is the direct-libcamera service binary. It captures from the selected
+IMX477 camera and serves:
+
+- `GET /status`
+- `GET /frame.jpg`
+- `GET /stream.mjpg`
+
+Working Pi baseline:
+
+```bash
+cargo build --manifest-path crates/iris/Cargo.toml --bin iris --features iris-service
+
+sudo ./target/debug/iris \
+    --bind 0.0.0.0:8080 \
+    --width 1280 \
+    --height 720 \
+    --exposure-us 59000 \
+    --gain 1.0
+```
+
+Current operating note: this PiSP/IMX477 setup times out above roughly
+`59000 us` manual exposure at the working service settings. Use analogue gain
+for additional brightness until a different mode is validated.
+
+To run both physically connected cameras, start two `iris` processes with
+different `--camera-index` values and different ports:
+
+```bash
+sudo ./target/debug/iris --bind 0.0.0.0:8080 --camera-index 0 --width 1280 --height 720
+sudo ./target/debug/iris --bind 0.0.0.0:8081 --camera-index 1 --width 1280 --height 720
+```
+
+This is a one-camera-per-process setup. It does not attempt simultaneous stereo
+capture or stream merging.
 
 ---
 

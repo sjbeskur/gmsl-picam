@@ -13,7 +13,7 @@
 #   docker buildx build \
 #     --file docker/rust-arm64.Dockerfile \
 #     --target artifact \
-#     --output type=local,dest=out/rust-arm64 \
+#     --output type=local,dest=target/aarch64-unknown-linux-gnu/release \
 #     .
 
 FROM ubuntu:24.04 AS base
@@ -93,7 +93,8 @@ ENV BINDGEN_EXTRA_CLANG_ARGS="\
 FROM base AS build
 
 WORKDIR /src
-COPY rust/ /src/
+COPY Cargo.toml Cargo.lock /src/
+COPY crates/iris/ /src/crates/iris/
 
 # BuildKit cache mounts keep the Cargo registry and the incremental build
 # cache across Docker rebuilds so that only changed crates are recompiled.
@@ -102,19 +103,29 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/src/target \
     cargo build \
+        --manifest-path crates/iris/Cargo.toml \
+        --bin iris \
+        --release \
+        --target aarch64-unknown-linux-gnu \
+        --features iris-service && \
+    cargo build \
+        --manifest-path crates/iris/Cargo.toml \
         --example libcamera_capture \
         --release \
         --target aarch64-unknown-linux-gnu \
         --features libcamera-example && \
     cargo build \
+        --manifest-path crates/iris/Cargo.toml \
         --example gstreamer_capture \
         --release \
         --target aarch64-unknown-linux-gnu \
         --features gstreamer-example && \
+    cp target/aarch64-unknown-linux-gnu/release/iris /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/examples/libcamera_capture /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/examples/gstreamer_capture /tmp/
 
 # ── Artifact export ───────────────────────────────────────────────────────────
 FROM scratch AS artifact
+COPY --from=build /tmp/iris  /
 COPY --from=build /tmp/libcamera_capture  /
 COPY --from=build /tmp/gstreamer_capture  /

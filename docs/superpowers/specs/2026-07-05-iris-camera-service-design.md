@@ -2,6 +2,10 @@
 
 Date: 2026-07-05
 
+Note: the implemented Rust workspace now lives under `crates/iris/`. This
+spec was written before the repo move, so some path references still say
+`rust/` and map to that newer location.
+
 ## Goal
 
 Build `iris`, a small Rust camera service for the GMSL IMX477 Raspberry Pi setup.
@@ -82,6 +86,11 @@ gain: auto/default unless provided
 pixel format: NV12
 ```
 
+If two cameras are physically connected, `iris` still selects one camera per
+process at startup with `--camera-index`. Running separate processes on separate
+ports is the intended way to switch between them; simultaneous multi-camera
+stream merging is out of scope for the PoC.
+
 CLI shape:
 
 ```bash
@@ -97,6 +106,12 @@ iris \
 Manual exposure and gain are optional. If exposure is provided, the service will
 disable AE and set exposure/gain controls similarly to the current
 `libcamera_capture` example.
+
+Operationally, the current PiSP/IMX477 setup on this board has a practical
+manual exposure ceiling of about `59000 us` at the working service settings.
+Requests above that value time out in the camera frontend. Gain remains usable
+for additional brightness, so the first PoC baseline should treat `59000 us`
+as the safe cap unless a future mode change proves otherwise.
 
 ## Data Flow
 
@@ -145,10 +160,12 @@ captured_at timestamp
 
 The timing helpers must use libcamera's `SensorTimestamp` definition: the time
 when the first row of the image sensor active array is exposed. A first-row CoI
-is `sensor_ts_ns + exposure_ns / 2`; a frame-center CoI also adds half the
-rolling readout duration. This work should preserve the existing
-`center_of_integration_ns` symbol as a first-row compatibility helper and expose
-the corrected frame-center value from `iris`.
+is `sensor_ts_ns + exposure_ns / 2`. For the PoC, the frame-center and per-row
+helpers use the frame duration as the available row-scan approximation, so the
+frame-center CoI is `sensor_ts_ns + exposure_ns / 2 + frame_duration / 2`.
+This work should preserve the existing `center_of_integration_ns` symbol as a
+first-row compatibility helper and expose the corrected frame-center value from
+`iris`.
 
 ## Error Handling
 
@@ -215,6 +232,11 @@ Pi deployment:
 just deploy-iris host=192.168.50.24
 ```
 
+The Rust crate may use narrower helper features such as `http-support` and
+`jpeg-support` to keep unit tests runnable without the host libcamera
+development package. `iris-service` remains the umbrella feature for the
+binary.
+
 Local host builds should remain useful where practical, but the real verification
 target is the Raspberry Pi arm64 environment because libcamera depends on the
 installed camera stack and hardware.
@@ -236,7 +258,7 @@ Manual Pi verification:
 
 ```bash
 /usr/local/bin/cam --list
-sudo /tmp/iris --bind 0.0.0.0:8080 --width 1280 --height 720
+sudo /tmp/iris --bind 0.0.0.0:8080 --width 1280 --height 720 --exposure-us 59000 --gain 1.0
 curl http://192.168.50.24:8080/status
 curl -o frame.jpg http://192.168.50.24:8080/frame.jpg
 ```

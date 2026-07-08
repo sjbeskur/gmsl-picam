@@ -29,8 +29,13 @@ default = []
 iris-service = [
     "dep:axum",
     "dep:clap",
-    "dep:image",
     "dep:libcamera",
+    "http-support",
+    "jpeg-support",
+]
+jpeg-support = ["dep:image"]
+http-support = [
+    "dep:axum",
     "dep:serde",
     "dep:serde_json",
     "dep:tokio",

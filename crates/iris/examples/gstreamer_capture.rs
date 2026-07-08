@@ -1,6 +1,6 @@
 /// Example: GStreamer appsink capture for frame processing.
 ///
-/// Build:  cargo build --example gstreamer_capture --features gstreamer-example
+/// Build:  cargo build --manifest-path crates/iris/Cargo.toml --example gstreamer_capture --features gstreamer-example
 /// Run:    GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
 ///             ./target/debug/examples/gstreamer_capture --frames 30 --width 1280 --height 720
 ///
@@ -20,10 +20,7 @@ use tracing::{debug, info, warn};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "gmsl_picam_rs=debug".into()),
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "gmsl_picam_rs=debug".into()))
         .init();
 
     let args: Vec<String> = std::env::args().collect();
@@ -38,9 +35,7 @@ fn main() -> Result<()> {
     // --- Build pipeline ---
     // libcamerasrc can accept exposure-time-us and awb-mode as GObject properties.
     let src_props = if exposure_us > 0 {
-        format!(
-            "libcamerasrc exposure-time={exposure_us} ae-enable=false"
-        )
+        format!("libcamerasrc exposure-time={exposure_us} ae-enable=false")
     } else {
         "libcamerasrc".to_string()
     };
@@ -56,7 +51,9 @@ fn main() -> Result<()> {
     info!("Pipeline: {}", pipeline_str);
 
     let pipeline = gst::parse::launch(&pipeline_str)
-        .context("gst::parse::launch failed — is GST_PLUGIN_PATH set to /usr/local/lib/gstreamer-1.0?")?
+        .context(
+            "gst::parse::launch failed — is GST_PLUGIN_PATH set to /usr/local/lib/gstreamer-1.0?",
+        )?
         .dynamic_cast::<gst::Pipeline>()
         .unwrap();
 
@@ -83,8 +80,8 @@ fn main() -> Result<()> {
                 let caps = sample.caps().ok_or(gst::FlowError::Error)?;
 
                 // Decode frame geometry from caps
-                let info = gst_video::VideoInfo::from_caps(caps)
-                    .map_err(|_| gst::FlowError::Error)?;
+                let info =
+                    gst_video::VideoInfo::from_caps(caps).map_err(|_| gst::FlowError::Error)?;
                 let w = info.width();
                 let h = info.height();
 
@@ -100,9 +97,7 @@ fn main() -> Result<()> {
                 // ExposureTime metadata directly from the completed request.
                 let pts = buf.pts();
 
-                let map = buf
-                    .map_readable()
-                    .map_err(|_| gst::FlowError::Error)?;
+                let map = buf.map_readable().map_err(|_| gst::FlowError::Error)?;
 
                 let idx = frame_count_cb.fetch_add(1, Ordering::SeqCst);
                 debug!(
@@ -185,7 +180,11 @@ fn mean_luminance_patch(data: &[u8], width: u32, height: u32, pw: u32, ph: u32) 
             count += 1;
         }
     }
-    if count == 0 { 0.0 } else { sum as f32 / count as f32 }
+    if count == 0 {
+        0.0
+    } else {
+        sum as f32 / count as f32
+    }
 }
 
 fn arg_value<T: std::str::FromStr>(args: &[String], flag: &str) -> Option<T> {

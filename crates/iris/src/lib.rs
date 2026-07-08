@@ -1,3 +1,9 @@
+pub mod camera;
+pub mod frame_store;
+#[cfg(feature = "http-support")]
+pub mod http;
+#[cfg(feature = "jpeg-support")]
+pub mod jpeg;
 pub mod timing;
 
 pub use timing::{
