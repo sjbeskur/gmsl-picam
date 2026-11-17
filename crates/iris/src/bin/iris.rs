@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use gmsl_picam_rs::camera::{run_capture, CameraConfig};
+use gmsl_picam_rs::camera::{run_capture_until_stopped, supervise_capture, CameraConfig};
 use gmsl_picam_rs::frame_store::{CameraState, FrameStore};
 use gmsl_picam_rs::http::router;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use tracing::{error, info};
+use tracing::info;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -81,29 +83,52 @@ async fn main() -> Result<()> {
         jpeg_quality: args.jpeg_quality,
     };
 
-    thread::spawn(move || {
-        if let Err(err) = run_capture(camera_config, Arc::clone(&camera_store)) {
-            error!(error = ?err, "camera capture stopped");
-            camera_store.set_camera_state(CameraState::Failed);
-            camera_store.set_last_error(format!("{err:#}"));
-        }
-    });
-
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
         .with_context(|| format!("failed to bind {}", args.bind))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let camera_stop = Arc::clone(&stop);
+    let camera_thread = thread::spawn(move || {
+        supervise_capture(Arc::clone(&camera_store), || {
+            run_capture_until_stopped(camera_config, camera_store, camera_stop)
+        });
+    });
+
     info!(
         camera_index = args.camera_index,
         bind = %args.bind,
         "iris listening"
     );
-    axum::serve(listener, router(store))
-        .with_graceful_shutdown(shutdown_signal())
+    // Drop HTTP streams on shutdown so an open MJPEG client cannot prevent
+    // the camera thread from stopping and releasing its buffers.
+    let server_result = tokio::select! {
+        result = axum::serve(listener, router(store)).into_future() => {
+            result.context("http server failed")
+        }
+        result = shutdown_signal() => result,
+    };
+    stop.store(true, Ordering::Release);
+    tokio::task::spawn_blocking(move || camera_thread.join())
         .await
-        .context("http server failed")?;
-    Ok(())
+        .context("failed to join camera task")?
+        .map_err(|_| anyhow::anyhow!("camera thread panicked"))?;
+    server_result
 }
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .context("failed to register SIGTERM handler")?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result.context("Ctrl-C handler failed")?,
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c()
+        .await
+        .context("Ctrl-C handler failed")?;
+    Ok(())
 }

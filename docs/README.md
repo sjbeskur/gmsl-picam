@@ -28,6 +28,8 @@ git submodule update --remote libcamera
 
 ## Guides
 
+- [Latest Iris session handoff (2026-11-16)](./iris-session-handoff.md)
+
 - [Ubuntu arm64 cross-build guide](./ubuntu-arm64-cross-build.md)
 - [Repeatable Pi 5 Ubuntu bring-up steps](./pi5-ubuntu-imx477-repeatable-steps.md)
 - [Camera operations, GStreamer streaming, and debug reference](./gmsl-camera-operations.md)

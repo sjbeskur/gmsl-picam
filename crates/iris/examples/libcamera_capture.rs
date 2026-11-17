@@ -169,7 +169,7 @@ fn main() -> Result<()> {
             .map(|g| *g)
             .unwrap_or(gain);
 
-        let coi_ns = center_of_integration_ns(sensor_ts_ns, actual_exposure_us);
+        let coi_ns = center_of_integration_ns(sensor_ts_ns, actual_exposure_us)?;
 
         info!(
             frame = frame_idx,

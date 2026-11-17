@@ -25,21 +25,14 @@ sudo ./target/debug/examples/libcamera_capture \
     --height 720
 ```
 
-**Center-of-integration math:**
+**Timing:** `SensorTimestamp` is the start of exposure of the first active
+sensor row, in nanoseconds on `CLOCK_BOOTTIME`. The first-row midpoint is
+`sensor_timestamp_ns + exposure_us * 500`.
 
-```
-coi_ns = sensor_timestamp_ns - (exposure_us * 1000 / 2)
-```
-
-`sensor_timestamp_ns` is the V4L2 timestamp stamped at end of frame readout.
-Subtracting half the exposure converts it to the photon-collection midpoint.
-
-For rolling-shutter row-level precision add a per-row offset:
-
-```
-row_offset_ns = row * (frame_duration_ns - exposure_ns) / frame_height
-coi_for_row   = coi_ns - row_offset_ns
-```
+A frame-center or row-specific midpoint additionally needs the active sensor
+readout duration from the sensor mode and line timing. The frame period includes
+blanking and is not a substitute. The checked timing helpers accept this active
+readout duration; row indices refer to the active sensor array, before resizing.
 
 ---
 
@@ -83,9 +76,14 @@ sudo ./target/debug/iris \
     --gain 1.0
 ```
 
-Current operating note: this PiSP/IMX477 setup times out above roughly
-`59000 us` manual exposure at the working service settings. Use analogue gain
-for additional brightness until a different mode is validated.
+The validated baseline is `59000 us` manual exposure; gain `1.5` also passes
+repeated capture/restart checks. A clean-start test at `75000 us`, requesting
+a `77000 us` frame period, still triggers a camera frontend timeout on the
+current Pi/GMSL setup. Returning to `59000 us` recovers with the new shutdown
+handling. This establishes a failing setting, not the exact maximum exposure.
+Use analogue gain for brightness while the longer-exposure failure is investigated.
+Longer exposure increases motion blur and reduces the available frame rate;
+analogue gain increases noise.
 
 To run both physically connected cameras, start two `iris` processes with
 different `--camera-index` values and different ports:
@@ -168,34 +166,41 @@ and compute CoI from `controls::SensorTimestamp` and `controls::ExposureTime`.
 
 ---
 
-## Rolling-shutter center-of-integration correction
+## Service reliability and metadata
 
-The IMX477 is a rolling-shutter sensor. Each row starts and ends its exposure at
-a slightly different absolute time. The per-row correction is:
+`/frame.jpg` and new `/stream.mjpg` connections return HTTP 503 when capture
+is unhealthy or the newest frame is over two seconds old. Existing MJPEG streams
+close on failure or expiry and send each frame at most once. Image responses use
+`Cache-Control: no-store`. `/status` includes `frame_age_ms` and `frame_stale`;
+freshness uses a monotonic clock independent of wall-clock corrections.
 
-```
-frame_duration_ns  = 1_000_000_000 / fps           (e.g. 33_333_333 ns at 30 fps)
-exposure_ns        = exposure_us * 1_000
-readout_ns         = frame_duration_ns - exposure_ns
+Exposure, analogue gain, and frame duration are reported from actual request
+metadata. Missing values are JSON `null`. `first_row_coi_ns` is the first-row
+exposure midpoint when valid exposure metadata is present. `coi_ns` is currently
+`null` because this capture path does not provide active-array readout timing.
+`captured_at_unix_ms` records host publication time, not sensor exposure time.
 
-row_start_offset_ns = row * readout_ns / frame_height
-coi_for_row_ns      = sensor_timestamp_ns
-                      - exposure_ns / 2             # mid-exposure
-                      - readout_ns                  # sensor_ts is end-of-last-row
-                      + row_start_offset_ns         # advance to this row
-```
+Stop Iris with Ctrl-C or SIGTERM and wait for it to exit before restarting.
+Shutdown stops libcamera and joins the capture worker. Worker errors or panics
+set the service status to `Failed`; restarting remains an explicit operation.
 
-At 1280×720/30fps with 8 ms exposure:
-- `readout_ns` ≈ 25.3 ms  
-- Row offset range ≈ 0 → 25.3 ms across the full frame height  
-- Top-row CoI differs from bottom-row CoI by ~25 ms
+Build and deploy from the same artifact directory:
 
-For most machine-vision tasks (detecting object position, not absolute time),
-a single frame-centre timestamp is sufficient:
-
-```
-coi_frame_centre_ns = sensor_timestamp_ns - exposure_ns / 2 - readout_ns / 2
+```bash
+export IRIS_ARTIFACT_DIR=out/iris-arm64
+just build
+just deploy-iris
 ```
 
-Only implement the per-row form if you are fusing with a sensor whose rate
-(e.g. 1 kHz IMU) is fast enough to resolve the ~25 ms row-spread.
+Alternatively, pass `just artifact_dir=out/iris-arm64 build` and the same override
+to `deploy-iris`. The old positional `just build <directory>` is replaced by this
+shared variable. Cross-builds export `iris` and both examples to that directory.
+
+On an idle Pi with the new binary, run the hardware restart check:
+
+```bash
+python3 scripts/check-iris-restart.py /tmp/iris --exposure-us 59000 --gain 1.0
+```
+
+The check starts two capture sessions in sequence, requires valid advancing
+sensor timestamps and a JPEG in each, and checks SIGTERM exit before restarting.

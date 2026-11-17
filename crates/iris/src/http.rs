@@ -27,29 +27,42 @@ async fn status_handler(
 }
 
 async fn frame_handler(State(store): State<Arc<FrameStore>>) -> Response {
-    let Some(frame) = store.latest_frame() else {
+    let Some(frame) = store.fresh_frame() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 
     (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"))],
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
         frame.jpeg.as_ref().to_vec(),
     )
         .into_response()
 }
 
-async fn stream_handler(State(_store): State<Arc<FrameStore>>) -> Response {
-    let store = _store;
-    let stream = IntervalStream::new(tokio::time::interval(Duration::from_millis(100))).filter_map(
-        move |_| {
-            store
-                .latest_frame()
-                .map(|frame| Ok::<Vec<u8>, Infallible>(multipart_chunk(&frame.jpeg)))
-        },
-    );
+async fn stream_handler(State(store): State<Arc<FrameStore>>) -> Response {
+    if store.fresh_frame().is_none() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let mut last_index = None;
+    let stream = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
+        .map(move |_| {
+            let frame = store.fresh_frame()?;
+            if last_index == Some(frame.metadata.frame_index) {
+                return Some(None);
+            }
+            last_index = Some(frame.metadata.frame_index);
+            Some(Some(Ok::<Vec<u8>, Infallible>(multipart_chunk(
+                &frame.jpeg,
+            ))))
+        })
+        .take_while(|frame| frame.is_some())
+        .filter_map(|frame| frame.flatten());
 
     Response::builder()
         .status(StatusCode::OK)
+        .header(header::CACHE_CONTROL, "no-store")
         .header(
             header::CONTENT_TYPE,
             format!("multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}"),
@@ -78,9 +91,11 @@ mod tests {
         FrameMetadata {
             frame_index: 1,
             sensor_ts_ns: 1_000_000_000,
-            exposure_us: 8_000,
-            analogue_gain: 1.5,
-            coi_ns: 1_004_000_000,
+            exposure_us: Some(8_000),
+            analogue_gain: Some(1.5),
+            coi_ns: None,
+            first_row_coi_ns: Some(1_004_000_000),
+            frame_duration_us: Some(33_333),
             width: 1_280,
             height: 720,
             pixel_format: "NV12".to_string(),
@@ -148,6 +163,7 @@ mod tests {
     async fn stream_handler_sets_mjpeg_content_type() {
         let store = Arc::new(FrameStore::new(CameraState::Running, 1_280, 720, "NV12"));
 
+        store.update_frame(vec![1, 2, 3], sample_metadata());
         let response = stream_handler(State(store)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -157,5 +173,56 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("multipart/x-mixed-replace; boundary=iris")
         );
+    }
+    #[tokio::test]
+    async fn failed_capture_rejects_snapshots_and_ends_existing_stream() {
+        let store = Arc::new(FrameStore::new(CameraState::Starting, 1280, 720, "NV12"));
+        store.update_frame(vec![1, 2, 3], sample_metadata());
+        let stream = stream_handler(State(Arc::clone(&store))).await;
+        store.set_camera_state(CameraState::Failed);
+        assert_eq!(
+            frame_handler(State(Arc::clone(&store))).await.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            stream_handler(State(store)).await.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let body = tokio::time::timeout(
+            Duration::from_secs(1),
+            axum::body::to_bytes(stream.into_body(), 100),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(body.is_empty());
+    }
+    #[tokio::test]
+    async fn stream_waits_for_new_frames_instead_of_repeating_old_ones() {
+        let store = Arc::new(FrameStore::new(CameraState::Starting, 1280, 720, "NV12"));
+        store.update_frame(vec![1], sample_metadata());
+        let response = stream_handler(State(Arc::clone(&store))).await;
+        let mut chunks = response.into_body().into_data_stream();
+        let first = chunks.next().await.unwrap().unwrap();
+        assert!(first.ends_with(&[1, b'\r', b'\n']));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), chunks.next())
+                .await
+                .is_err()
+        );
+        let mut metadata = sample_metadata();
+        metadata.frame_index += 1;
+        store.update_frame(vec![2], metadata);
+        let next = tokio::time::timeout(Duration::from_secs(1), chunks.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(next.ends_with(&[2, b'\r', b'\n']));
+        store.set_camera_state(CameraState::Failed);
+        assert!(tokio::time::timeout(Duration::from_secs(1), chunks.next())
+            .await
+            .unwrap()
+            .is_none());
     }
 }

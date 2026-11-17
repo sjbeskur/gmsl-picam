@@ -2,6 +2,10 @@
 
 Date: 2026-07-05
 
+Historical dual-camera investigation. For current Pi access, Iris settings,
+restart fixes, and exposure results, see the
+[2026-11-16 Iris handoff](iris-session-handoff.md).
+
 ## Hardware
 
 - Raspberry Pi 5 at `192.168.50.24`

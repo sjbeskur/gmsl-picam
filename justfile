@@ -1,18 +1,21 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# Override once for every artifact recipe: just artifact_dir=out/test build
+artifact_dir := env("IRIS_ARTIFACT_DIR", "target/aarch64-unknown-linux-gnu/release")
+
 default:
     @just --list
 
-build $output_dir="target/aarch64-unknown-linux-gnu/release":
-    cd "{{justfile_directory()}}" && ./scripts/build-rust-arm64.sh "$output_dir"
+build:
+    cd "{{justfile_directory()}}" && ./scripts/build-rust-arm64.sh "{{artifact_dir}}"
 
 deploy-iris $host="192.168.50.150" $user="sbeskur" $path="/tmp/iris":
-    cd "{{justfile_directory()}}" && test -x target/aarch64-unknown-linux-gnu/release/iris
-    cd "{{justfile_directory()}}" && scp target/aarch64-unknown-linux-gnu/release/iris "${user}@${host}:${path}"
+    cd "{{justfile_directory()}}" && test -x "{{artifact_dir}}/iris"
+    cd "{{justfile_directory()}}" && scp "{{artifact_dir}}/iris" "${user}@${host}:${path}"
 
 deploy-libcam $host="192.168.50.150" $user="sbeskur" $path="/tmp/libcamera_capture":
-    cd "{{justfile_directory()}}" && test -x target/aarch64-unknown-linux-gnu/release/libcamera_capture
-    cd "{{justfile_directory()}}" && scp target/aarch64-unknown-linux-gnu/release/libcamera_capture "${user}@${host}:${path}"
+    cd "{{justfile_directory()}}" && test -x "{{artifact_dir}}/libcamera_capture"
+    cd "{{justfile_directory()}}" && scp "{{artifact_dir}}/libcamera_capture" "${user}@${host}:${path}"
 
 
 pi-camera-check $host="192.168.50.150" $user="sbeskur":
