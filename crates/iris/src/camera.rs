@@ -4,40 +4,10 @@ use anyhow::{bail, Result};
 use std::sync::atomic::AtomicBool;
 #[cfg(feature = "iris-service")]
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct CameraConfig {
-    pub camera_index: usize,
-    pub width: u32,
-    pub height: u32,
-    pub fps: u32,
-    pub exposure_us: Option<i32>,
-    pub gain: Option<f32>,
-    pub jpeg_quality: u8,
-}
-
-impl Default for CameraConfig {
-    fn default() -> Self {
-        Self {
-            camera_index: 0,
-            width: 1_280,
-            height: 720,
-            fps: 30,
-            exposure_us: None,
-            gain: None,
-            jpeg_quality: 85,
-        }
-    }
-}
-
-impl CameraConfig {
-    pub fn frame_duration_us(&self) -> i64 {
-        let fps = self.fps.max(1) as i64;
-        1_000_000 / fps
-    }
-}
+pub use iris_api::CameraSettings as CameraConfig;
 
 pub fn captured_at_unix_ms() -> u64 {
     SystemTime::now()
@@ -105,14 +75,25 @@ pub fn run_capture_until_stopped(
     store: Arc<FrameStore>,
     stop: Arc<AtomicBool>,
 ) -> Result<()> {
+    let settings = Arc::new(RwLock::new(config.clone()));
+    run_capture_with_settings(config, store, stop, settings)
+}
+
+pub fn run_capture_with_settings(
+    config: CameraConfig,
+    store: Arc<FrameStore>,
+    stop: Arc<AtomicBool>,
+    settings: Arc<RwLock<CameraConfig>>,
+) -> Result<()> {
+    config.validate()?;
     #[cfg(feature = "iris-service")]
     {
-        return run_capture_libcamera(config, store, stop);
+        return run_capture_libcamera(config, store, stop, settings);
     }
 
     #[cfg(not(feature = "iris-service"))]
     {
-        let _ = (config, store, stop);
+        let _ = (config, store, stop, settings);
         bail!("iris-service feature is required for camera capture");
     }
 }
@@ -122,6 +103,7 @@ fn run_capture_libcamera(
     config: CameraConfig,
     store: Arc<FrameStore>,
     stop: Arc<AtomicBool>,
+    settings: Arc<RwLock<CameraConfig>>,
 ) -> Result<()> {
     use crate::frame_store::CameraState;
     use anyhow::Context;
@@ -233,22 +215,9 @@ fn run_capture_libcamera(
         .collect::<Result<Vec<_>>>()?;
 
     if let Some(first) = requests.get_mut(0) {
-        let ctrls = first.controls_mut();
-
-        if let Some(exposure_us) = config.exposure_us {
-            ctrls.set(controls::ExposureTimeMode::Manual).ok();
-            ctrls.set(controls::AnalogueGainMode::Manual).ok();
-            ctrls.set(controls::ExposureTime(exposure_us)).ok();
-            let min_frame_us = exposure_us as i64 + 2_000;
-            ctrls
-                .set(controls::FrameDurationLimits([min_frame_us, min_frame_us]))
-                .ok();
-        }
-        if let Some(gain) = config.gain {
-            ctrls.set(controls::AnalogueGainMode::Manual).ok();
-            ctrls.set(controls::AnalogueGain(gain)).ok();
-        }
+        apply_camera_controls(first.controls_mut(), &config)?;
     }
+    let mut applied_settings = config.clone();
 
     cam.start(None).context("camera start() failed")?;
     // Always stop streaming before dropping request buffers, including on errors.
@@ -284,9 +253,6 @@ fn run_capture_libcamera(
                     .get::<controls::SensorTimestamp>()
                     .map(|ts| *ts)
                     .unwrap_or(0);
-                if sensor_ts_ns <= 0 {
-                    bail!("capture request has no valid sensor timestamp; refusing to publish an invalid frame");
-                }
                 let exposure_us = meta
                     .get::<controls::ExposureTime>()
                     .map(|value| *value)
@@ -362,7 +328,10 @@ fn run_capture_libcamera(
                         encoding,
                         full_range: color_space.range == Range::Full,
                     },
-                    config.jpeg_quality,
+                    settings
+                        .read()
+                        .map_err(|_| anyhow::anyhow!("settings lock poisoned"))?
+                        .jpeg_quality,
                 ) {
                     Ok(jpeg) => {
                         let metadata = metadata_from_values(
@@ -388,9 +357,17 @@ fn run_capture_libcamera(
                 }
 
                 req.reuse(ReuseFlag::REUSE_BUFFERS);
+                let desired = settings
+                    .read()
+                    .map_err(|_| anyhow::anyhow!("settings lock poisoned"))?
+                    .clone();
+                if desired != applied_settings {
+                    apply_camera_controls(req.controls_mut(), &desired)?;
+                }
                 cam.queue_request(req)
                     .map_err(|(_, e)| e)
                     .context("re-queue failed")?;
+                applied_settings = desired;
             }
             Ok(())
         },
@@ -400,6 +377,44 @@ fn run_capture_libcamera(
         Ok(result) => result.and(stop_result),
         Err(panic) => std::panic::resume_unwind(panic),
     }
+}
+
+#[cfg(feature = "iris-service")]
+fn apply_camera_controls(
+    controls: &mut libcamera::control::ControlList,
+    config: &CameraConfig,
+) -> Result<()> {
+    use anyhow::Context;
+    use libcamera::controls as c;
+    controls
+        .set(if config.exposure_us.is_some() {
+            c::ExposureTimeMode::Manual
+        } else {
+            c::ExposureTimeMode::Auto
+        })
+        .context("set exposure mode failed")?;
+    controls
+        .set(if config.gain.is_some() {
+            c::AnalogueGainMode::Manual
+        } else {
+            c::AnalogueGainMode::Auto
+        })
+        .context("set gain mode failed")?;
+    if let Some(exposure) = config.exposure_us {
+        controls
+            .set(c::ExposureTime(exposure))
+            .context("set exposure failed")?;
+    }
+    if let Some(gain) = config.gain {
+        controls
+            .set(c::AnalogueGain(gain))
+            .context("set gain failed")?;
+    }
+    let duration = config.effective_frame_duration_us();
+    controls
+        .set(c::FrameDurationLimits([duration, duration]))
+        .context("set frame duration failed")?;
+    Ok(())
 }
 
 #[cfg(any(feature = "iris-service", test))]

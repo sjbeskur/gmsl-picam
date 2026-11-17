@@ -9,9 +9,11 @@ default:
 build:
     cd "{{justfile_directory()}}" && ./scripts/build-rust-arm64.sh "{{artifact_dir}}"
 
-deploy-iris $host="192.168.50.150" $user="sbeskur" $path="/tmp/iris":
-    cd "{{justfile_directory()}}" && test -x "{{artifact_dir}}/iris"
-    cd "{{justfile_directory()}}" && scp "{{artifact_dir}}/iris" "${user}@${host}:${path}"
+# Copy the install bundle to the Pi; then run sudo bash /tmp/iris-install/install-irisd.sh.
+deploy-iris $host="192.168.50.150" $user="sbeskur":
+    cd "{{justfile_directory()}}" && test -x "{{artifact_dir}}/irisd" && test -x "{{artifact_dir}}/iris"
+    ssh "${user}@${host}" 'mkdir -p /tmp/iris-install'
+    cd "{{justfile_directory()}}" && scp "{{artifact_dir}}/irisd" "{{artifact_dir}}/iris" scripts/install-irisd.sh deploy/irisd.service deploy/irisd.env "${user}@${host}:/tmp/iris-install/"
 
 deploy-libcam $host="192.168.50.150" $user="sbeskur" $path="/tmp/libcamera_capture":
     cd "{{justfile_directory()}}" && test -x "{{artifact_dir}}/libcamera_capture"

@@ -6,10 +6,12 @@ description = "Rust examples for GMSL IMX477 camera on Raspberry Pi 5"
 
 [dependencies]
 anyhow = "1"
+iris-api = { path = "../iris-api" }
+iris-client = { path = "../iris-client", features = ["config"], optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = { version = "0.7", optional = true }
-clap = { version = "4", features = ["derive"], optional = true }
+clap = { version = "4", features = ["derive", "env"], optional = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
@@ -26,6 +28,7 @@ gstreamer-video = { version = "0.25", optional = true }
 
 [features]
 default = []
+iris-client = ["dep:iris-client", "dep:clap", "dep:tokio", "dep:serde_json"]
 iris-service = [
     "dep:axum",
     "dep:clap",
@@ -47,6 +50,11 @@ gstreamer-example = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"
 [[bin]]
 name = "iris"
 path = "src/bin/iris.rs"
+required-features = ["iris-client"]
+
+[[bin]]
+name = "irisd"
+path = "src/bin/irisd.rs"
 required-features = ["iris-service"]
 
 [[example]]
@@ -56,3 +64,6 @@ required-features = ["libcamera-example"]
 [[example]]
 name = "gstreamer_capture"
 required-features = ["gstreamer-example"]
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

@@ -94,7 +94,7 @@ FROM base AS build
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock /src/
-COPY crates/iris/ /src/crates/iris/
+COPY crates/ /src/crates/
 
 # BuildKit cache mounts keep the Cargo registry and the incremental build
 # cache across Docker rebuilds so that only changed crates are recompiled.
@@ -104,10 +104,10 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build \
         --manifest-path crates/iris/Cargo.toml \
-        --bin iris \
+        --bins \
         --release \
         --target aarch64-unknown-linux-gnu \
-        --features iris-service && \
+        --features iris-service,iris-client && \
     cargo build \
         --manifest-path crates/iris/Cargo.toml \
         --example libcamera_capture \
@@ -120,6 +120,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
         --release \
         --target aarch64-unknown-linux-gnu \
         --features gstreamer-example && \
+    cp target/aarch64-unknown-linux-gnu/release/irisd /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/iris /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/examples/libcamera_capture /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/examples/gstreamer_capture /tmp/
@@ -127,5 +128,9 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 # ── Artifact export ───────────────────────────────────────────────────────────
 FROM scratch AS artifact
 COPY --from=build /tmp/iris  /
+COPY --from=build /tmp/irisd /
+COPY deploy/irisd.service /
+COPY deploy/irisd.env /
+COPY scripts/install-irisd.sh /
 COPY --from=build /tmp/libcamera_capture  /
 COPY --from=build /tmp/gstreamer_capture  /

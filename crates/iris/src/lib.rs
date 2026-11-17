@@ -1,4 +1,6 @@
 pub mod camera;
+#[cfg(feature = "http-support")]
+pub mod control;
 pub mod frame_store;
 #[cfg(feature = "http-support")]
 pub mod http;

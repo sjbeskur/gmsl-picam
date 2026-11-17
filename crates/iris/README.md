@@ -54,47 +54,33 @@ GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
         --exposure-us 8000   # 0 = leave auto-exposure enabled
 ```
 
-### `iris` - camera service
+### `irisd` daemon and `iris` client
 
-`iris` is the direct-libcamera service binary. It captures from the selected
-IMX477 camera and serves:
-
-- `GET /status`
-- `GET /frame.jpg`
-- `GET /stream.mjpg`
-
-Working Pi baseline:
+`irisd` captures the selected IMX477 and serves `/status`, `/frame.jpg`, and
+`/stream.mjpg`. `iris` communicates with its local control API:
 
 ```bash
-cargo build --manifest-path crates/iris/Cargo.toml --bin iris --features iris-service
-
-sudo ./target/debug/iris \
-    --bind 0.0.0.0:8080 \
-    --width 1280 \
-    --height 720 \
-    --exposure-us 59000 \
-    --gain 1.0
+iris config front --endpoint http://192.168.50.150:8081 --token-file ~/.config/iris/token
+iris camera front status
+iris camera front start
+iris camera front set --exposure-us 59000 --gain 1.5
+iris camera front stop
 ```
 
-The validated baseline is `59000 us` manual exposure; gain `1.5` also passes
-repeated capture/restart checks. A clean-start test at `75000 us`, requesting
-a `77000 us` frame period, still triggers a camera frontend timeout on the
-current Pi/GMSL setup. Returning to `59000 us` recovers with the new shutdown
-handling. This establishes a failing setting, not the exact maximum exposure.
-Use analogue gain for brightness while the longer-exposure failure is investigated.
-Longer exposure increases motion blur and reduces the available frame rate;
-analogue gain increases noise.
+Build and install the systemd bundle using the
+[daemon installation guide](../../docs/irisd-service.md). Exposure and gain can
+change while capture is running. Camera selection and dimensions require stopped
+capture. The validated manual baseline is 59000 us exposure and gain 1.5.
 
-To run both physically connected cameras, start two `iris` processes with
-different `--camera-index` values and different ports:
+For a manual development session:
 
 ```bash
-sudo ./target/debug/iris --bind 0.0.0.0:8080 --camera-index 0 --width 1280 --height 720
-sudo ./target/debug/iris --bind 0.0.0.0:8081 --camera-index 1 --width 1280 --height 720
+cargo build --bin irisd --features iris-service
+cargo build --bin iris --features iris-client
+./target/debug/irisd --exposure-us 59000 --gain 1.5
+# In another terminal:
+./target/debug/iris status
 ```
-
-This is a one-camera-per-process setup. It does not attempt simultaneous stereo
-capture or stream merging.
 
 ---
 
@@ -180,7 +166,7 @@ exposure midpoint when valid exposure metadata is present. `coi_ns` is currently
 `null` because this capture path does not provide active-array readout timing.
 `captured_at_unix_ms` records host publication time, not sensor exposure time.
 
-Stop Iris with Ctrl-C or SIGTERM and wait for it to exit before restarting.
+Stop the irisd daemon with Ctrl-C or SIGTERM and wait for it to exit before restarting.
 Shutdown stops libcamera and joins the capture worker. Worker errors or panics
 set the service status to `Failed`; restarting remains an explicit operation.
 
@@ -196,10 +182,10 @@ Alternatively, pass `just artifact_dir=out/iris-arm64 build` and the same overri
 to `deploy-iris`. The old positional `just build <directory>` is replaced by this
 shared variable. Cross-builds export `iris` and both examples to that directory.
 
-On an idle Pi with the new binary, run the hardware restart check:
+On an idle Pi with the irisd binary, run the hardware restart check:
 
 ```bash
-python3 scripts/check-iris-restart.py /tmp/iris --exposure-us 59000 --gain 1.0
+python3 scripts/check-iris-restart.py /tmp/irisd --exposure-us 59000 --gain 1.0
 ```
 
 The check starts two capture sessions in sequence, requires valid advancing

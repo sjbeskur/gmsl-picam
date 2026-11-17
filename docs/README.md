@@ -28,6 +28,8 @@ git submodule update --remote libcamera
 
 ## Guides
 
+- [Iris daemon, systemd installation, and client commands](./irisd-service.md)
+
 - [Latest Iris session handoff (2026-11-16)](./iris-session-handoff.md)
 
 - [Ubuntu arm64 cross-build guide](./ubuntu-arm64-cross-build.md)

@@ -3,44 +3,7 @@ use std::time::{Duration, Instant};
 
 pub const MAX_FRAME_AGE: Duration = Duration::from_secs(2);
 
-#[cfg_attr(feature = "http-support", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CameraState {
-    Starting,
-    Running,
-    Degraded,
-    Failed,
-}
-
-#[cfg_attr(feature = "http-support", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct FrameMetadata {
-    pub frame_index: u64,
-    pub sensor_ts_ns: i64,
-    pub exposure_us: Option<i32>,
-    pub analogue_gain: Option<f32>,
-    pub coi_ns: Option<i64>,
-    pub first_row_coi_ns: Option<i64>,
-    pub frame_duration_us: Option<i64>,
-    pub width: u32,
-    pub height: u32,
-    pub pixel_format: String,
-    pub captured_at_unix_ms: u64,
-}
-
-#[cfg_attr(feature = "http-support", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct ServiceStatus {
-    pub camera_state: CameraState,
-    pub frame_count: u64,
-    pub width: u32,
-    pub height: u32,
-    pub pixel_format: String,
-    pub latest_frame: Option<FrameMetadata>,
-    pub last_error: Option<String>,
-    pub frame_age_ms: Option<u64>,
-    pub frame_stale: bool,
-}
+pub use iris_api::{CameraState, FrameMetadata, ServiceStatus};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LatestFrame {
@@ -87,6 +50,14 @@ impl FrameStore {
         }
     }
 
+    pub fn reset(&self, state: CameraState, width: u32, height: u32) {
+        let fresh = Self::new(state, width, height, "NV12")
+            .inner
+            .into_inner()
+            .expect("new store lock");
+        *self.inner.write().expect("frame store lock poisoned") = fresh;
+    }
+
     pub fn status(&self) -> ServiceStatus {
         let inner = self.inner.read().expect("frame store lock poisoned");
         let mut status = inner.status.clone();
@@ -124,6 +95,9 @@ impl FrameStore {
 
     pub fn update_frame(&self, jpeg: impl Into<Vec<u8>>, metadata: FrameMetadata) {
         let mut inner = self.inner.write().expect("frame store lock poisoned");
+        if inner.status.camera_state == CameraState::Stopping {
+            return;
+        }
         inner.received_at = Some(Instant::now());
         inner.status.camera_state = CameraState::Running;
         inner.status.frame_count += 1;

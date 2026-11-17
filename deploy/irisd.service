@@ -1,0 +1,28 @@
+[Unit]
+Description=Iris IMX477 camera daemon
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=iris
+Group=iris
+SupplementaryGroups=video render
+EnvironmentFile=-/etc/iris/irisd.env
+ExecStart=/usr/local/bin/irisd
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

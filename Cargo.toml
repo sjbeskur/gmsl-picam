@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/iris"]
+members = ["crates/iris", "crates/iris-api", "crates/iris-client"]
 resolver = "2"

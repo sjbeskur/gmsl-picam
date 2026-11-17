@@ -1,0 +1,9 @@
+[package]
+name = "iris-api"
+version = "0.1.0"
+edition = "2021"
+description = "Shared camera settings and status types for irisd and its clients"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }

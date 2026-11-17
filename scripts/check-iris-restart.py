@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hardware regression check. Run on an idle Pi; uses only Python's standard library."""
+"""Daemon restart regression check (pass the irisd binary). Run on an idle Pi; uses only Python's standard library."""
 import argparse
 import json
 import signal
@@ -20,7 +20,7 @@ def check_session(binary, exposure, gain, log):
     with log.open("wb") as output:
         process = subprocess.Popen(
             [str(binary), "--bind", f"127.0.0.1:{port}", "--exposure-us", str(exposure),
-             "--gain", str(gain), "--width", "1280", "--height", "720"],
+             "--control-bind", "127.0.0.1:0", "--gain", str(gain), "--width", "1280", "--height", "720"],
             stdout=output, stderr=subprocess.STDOUT,
         )
         try:
@@ -28,7 +28,7 @@ def check_session(binary, exposure, gain, log):
             first_timestamp = None
             while time.monotonic() < deadline:
                 if process.poll() is not None:
-                    raise RuntimeError("Iris exited before capture")
+                    raise RuntimeError("irisd exited before capture")
                 try:
                     with urllib.request.urlopen(base + "/status", timeout=2) as response:
                         status = json.load(response)
@@ -64,7 +64,7 @@ def check_session(binary, exposure, gain, log):
                     process.wait()
                     raise RuntimeError("SIGTERM shutdown exceeded 5 seconds")
         if process.returncode != 0:
-            raise RuntimeError(f"Iris exited with {process.returncode}")
+            raise RuntimeError(f"irisd exited with {process.returncode}")
 
 
 def main():

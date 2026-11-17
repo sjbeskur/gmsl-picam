@@ -3,7 +3,67 @@
 Date: 2026-11-16 (America/Denver)
 Session tag: `iris-reliability-2026-11-16`
 
-## Working state
+## Daemon/client follow-up
+
+The working tree now splits the previous service executable into `irisd` and an
+`iris` control client. See [the current service guide](irisd-service.md) for build,
+installation, API, and validation commands. The tagged session described below
+predates this split: its `/tmp/iris` command is the old daemon, not the new client.
+
+The new install bundle is exported under `out/iris-daemon`. `just deploy-iris`
+copies both binaries and the installer/unit/defaults to `/tmp/iris-install`.
+Persistent defaults live in `/etc/iris/irisd.env`. Runtime gain/exposure settings
+can change without a capture restart. Camera start/stop is separate from systemd
+service start/stop. The installed control API uses authenticated HTTP/JSON over TCP on port 8081;
+preview stays on port 8080. The installer generates `/etc/iris/control.token`;
+remote clients use `--address <pi>:8081 --token-file <private-file>`. Manual daemon
+startup defaults to loopback and requires a token file for non-loopback binds. Local tests cover serialized ownership, live updates, failed-worker
+recovery, validation, and the control API's required mutation header.
+
+`iris-api` now holds shared serializable settings/status types and validation;
+`iris-client` is the async HTTP foundation used by the CLI, independent of camera
+and server dependencies. It builds for native and wasm32 browser targets. Browser
+usage requires an application proxy; no browser UI was built. See the client
+library README for usage.
+
+The daemon/client pair passed Pi hardware checks: live exposure changed from
+59000 us to measured 44999 us and gain from 1.5 to 2.0, without restarting capture.
+Camera stop/start passed in the same daemon, and full SIGTERM daemon restart
+checks also passed. The install bundle is on the Pi at `/tmp/iris-install`.
+System-wide installation remains pending an interactive sudo command because
+passwordless sudo is unavailable: `sudo bash /tmp/iris-install/install-irisd.sh`.
+Tests leave capture stopped so the install does not conflict with a manual daemon.
+Direct authenticated TCP control from the development host to `192.168.50.150:8081`
+also passed status/settings/start/stop and rejected a missing credential. The
+remote test daemon was stopped and its test token removed; the real installer
+creates a fresh persistent credential. Validation now includes 34 native unit
+checks, a client documentation example, native/ARM builds and a wasm32 client
+build. The systemd unit was verified against its staged executable; activation
+under the dedicated service account still needs the sudo installation step.
+
+## Named client profiles follow-up
+
+`iris config [name] --endpoint <url> --token-file <path>` now saves native client
+TOML under `$XDG_CONFIG_HOME/iris/config.toml` or `~/.config/iris/config.toml`.
+`iris camera <name> start|stop|status|set` resolves the saved profile. Names are
+endpoint aliases for each daemon's selected camera; there is still one capture
+worker per daemon. No-argument `iris config` creates/updates the default profile.
+Use `iris config --show` for inspection, and `--config`/`IRIS_CONFIG` for another
+file. The reusable native implementation is `iris-client`'s optional `config`
+module; its transport still builds for WebAssembly without filesystem access.
+
+Config persistence is atomic, mode 0600 on Unix, stores credential paths rather
+than secrets, preserves other profiles, and rejects malformed TOML rather than
+overwriting it. Named CLI routing and credentials are exercised through an actual
+local HTTP server. Legacy top-level commands still work using the default profile
+or localhost, so older regression scripts remain compatible.
+Validation for this follow-up: 39 native unit/integration tests and the client
+library documentation example pass; the ARM bundle and wasm32 client build pass.
+On the Pi, saving/showing a profile with an isolated temporary config passed and
+its file mode was 0600. The refreshed bundle remains at `/tmp/iris-install`;
+no real user config or active systemd service was changed by the profile check.
+
+## Tagged session baseline (historical)
 
 - Raspberry Pi 5: `192.168.50.150`, SSH user `sbeskur`.
 - One IMX477 enumerated, camera index `0`.
