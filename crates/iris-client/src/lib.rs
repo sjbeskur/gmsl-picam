@@ -116,6 +116,19 @@ impl IrisClient {
         Ok(self)
     }
 
+    /// Check the daemon and credentials with an empty HTTP 204 response.
+    /// This does not start, stop, or inspect the camera.
+    pub async fn ping(&self) -> Result<(), ClientError> {
+        let response = self.send(Method::GET, "ping", None).await?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(ClientError::Api {
+                status: response.status().as_u16(),
+                message: "unexpected ping response; expected HTTP 204".into(),
+            });
+        }
+        Ok(())
+    }
+
     pub async fn status(&self) -> Result<DaemonStatus, ClientError> {
         self.request(Method::GET, "status", None).await
     }
@@ -138,6 +151,15 @@ impl IrisClient {
         path: &str,
         patch: Option<&SettingsPatch>,
     ) -> Result<DaemonStatus, ClientError> {
+        Ok(self.send(method, path, patch).await?.json().await?)
+    }
+
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        patch: Option<&SettingsPatch>,
+    ) -> Result<reqwest::Response, ClientError> {
         let url = self
             .base
             .join(path)
@@ -164,7 +186,7 @@ impl IrisClient {
                 .unwrap_or(body);
             return Err(ClientError::Api { status, message });
         }
-        Ok(response.json().await?)
+        Ok(response)
     }
 }
 
@@ -285,5 +307,26 @@ mod tests {
             .unwrap()
             .to_lowercase()
             .contains("authorization: bearer secret-token"));
+    }
+    #[tokio::test]
+    async fn ping_uses_small_authenticated_request_and_empty_response() {
+        let (url, server) = server("204 No Content", "");
+        IrisClient::new(&url)
+            .unwrap()
+            .with_token("test-token")
+            .unwrap()
+            .ping()
+            .await
+            .unwrap();
+        let request = server.join().unwrap().to_lowercase();
+        assert!(request.starts_with("get /api/iris/ping "));
+        assert!(request.contains("authorization: bearer test-token"));
+        assert!(request.ends_with("\r\n\r\n"));
+        let (url, server) = self::server("200 OK", "not a daemon ping response");
+        assert!(matches!(
+            IrisClient::new(&url).unwrap().ping().await,
+            Err(ClientError::Api { status: 200, .. })
+        ));
+        server.join().unwrap();
     }
 }

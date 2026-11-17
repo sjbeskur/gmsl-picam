@@ -56,6 +56,9 @@ GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
 
 ### `irisd` daemon and `iris` client
 
+Install the native CLI into `~/.local/bin` with `just install-iris`.
+This requires neither sudo nor camera libraries on the workstation.
+
 `irisd` captures the selected IMX477 and serves `/status`, `/frame.jpg`, and
 `/stream.mjpg`. `iris` communicates with its local control API:
 

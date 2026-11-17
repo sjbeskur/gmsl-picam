@@ -41,14 +41,33 @@ checks, a client documentation example, native/ARM builds and a wasm32 client
 build. The systemd unit was verified against its staged executable; activation
 under the dedicated service account still needs the sudo installation step.
 
+## Connectivity utility follow-up
+
+`iris ping` checks the default connection; `iris ping <name>` and
+`iris camera <name> ping` use a saved camera profile. The library exposes
+`IrisClient::ping()`. A new authenticated `GET /ping` route responds with an empty
+HTTP 204 without touching camera state. The CLI reports round-trip milliseconds
+and uses a three-second timeout. Older daemon builds return 404 until updated.
+The native installed CLI and `/tmp/iris-install` bundle have been refreshed.
+An isolated idle Pi daemon returned pong (0.71 ms on loopback); subsequent status
+remained Stopped with zero frames. The probe daemon was terminated, and no active
+service was restarted. Workspace validation passed 42 tests and a client doc
+example; ARM and wasm32 builds passed.
+
 ## Named client profiles follow-up
+
+The workstation's native CLI is installed at `~/.local/bin/iris` using
+`cargo install --locked --path crates/iris --bin iris --no-default-features
+--features iris-client --root ~/.local`. The directory is already on PATH;
+invocation from outside the repository was verified. Reinstall/update from the
+repository with `just install-iris`. This does not install or start the Pi daemon.
 
 `iris config [name] --endpoint <url> --token-file <path>` now saves native client
 TOML under `$XDG_CONFIG_HOME/iris/config.toml` or `~/.config/iris/config.toml`.
 `iris camera <name> start|stop|status|set` resolves the saved profile. Names are
 endpoint aliases for each daemon's selected camera; there is still one capture
 worker per daemon. No-argument `iris config` creates/updates the default profile.
-Use `iris config --show` for inspection, and `--config`/`IRIS_CONFIG` for another
+Use `iris show` (or `iris config --show`) for offline inspection, and `--config`/`IRIS_CONFIG` for another
 file. The reusable native implementation is `iris-client`'s optional `config`
 module; its transport still builds for WebAssembly without filesystem access.
 

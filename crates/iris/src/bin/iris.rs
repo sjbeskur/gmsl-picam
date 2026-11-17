@@ -5,7 +5,11 @@ use iris_client::{IrisClient, SettingsPatch};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
-#[command(name = "iris", about = "Control camera capture in the irisd service")]
+#[command(
+    name = "iris",
+    version,
+    about = "Control camera capture in the irisd service"
+)]
 struct Cli {
     #[arg(long, env = "IRIS_CONTROL_ADDRESS", global = true)]
     address: Option<String>,
@@ -23,6 +27,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Test the configured daemon connection and report round-trip time.
+    Ping { camera_name: Option<String> },
+    /// Show saved TOML configuration without connecting to the daemon.
+    Show,
     /// Save a named connection in the client TOML file; no network request is made.
     Config(ConfigArgs),
     /// Control the camera served by a saved connection profile.
@@ -55,6 +63,8 @@ struct ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 enum CameraCommand {
+    /// Test this camera profile's daemon connection.
+    Ping,
     Status,
     Start,
     Stop,
@@ -126,8 +136,7 @@ fn save_config(
     mut config: ClientConfig,
 ) -> Result<()> {
     if options.show {
-        println!("{}", config.to_toml()?);
-        return Ok(());
+        return show_config(&config);
     }
     anyhow::ensure!(
         args.token.is_none(),
@@ -165,6 +174,11 @@ fn save_config(
     Ok(())
 }
 
+fn show_config(config: &ClientConfig) -> Result<()> {
+    println!("{}", config.to_toml()?);
+    Ok(())
+}
+
 fn connect(args: &Cli, mut profile: CameraProfile, path: &Path) -> Result<IrisClient> {
     if let Some(endpoint) = endpoint_override(args) {
         profile.endpoint = endpoint;
@@ -191,15 +205,40 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
     let path = config_path(&args)?;
     let config = ClientConfig::load(&path)?;
+    if let Command::Show = &args.command {
+        return show_config(&config);
+    }
     if let Command::Config(options) = &args.command {
         return save_config(&args, options, &path, config);
     }
     let profile = match &args.command {
-        Command::Camera { camera_name, .. } => config.camera(camera_name)?.clone(),
+        Command::Camera { camera_name, .. }
+        | Command::Ping {
+            camera_name: Some(camera_name),
+        } => config.camera(camera_name)?.clone(),
         _ => config.cameras.get("default").cloned().unwrap_or_default(),
     };
     let endpoint = endpoint_override(&args).unwrap_or_else(|| profile.endpoint.clone());
     let client = connect(&args, profile, &path)?;
+    if matches!(
+        &args.command,
+        Command::Ping { .. }
+            | Command::Camera {
+                command: CameraCommand::Ping,
+                ..
+            }
+    ) {
+        let started = std::time::Instant::now();
+        tokio::time::timeout(std::time::Duration::from_secs(3), client.ping())
+            .await
+            .with_context(|| format!("ping to {endpoint} timed out after 3 seconds"))?
+            .with_context(|| format!("ping to {endpoint} failed"))?;
+        println!(
+            "pong {endpoint} ({:.2} ms)",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        return Ok(());
+    }
     let status = match args.command {
         Command::Status
         | Command::Camera {
@@ -221,7 +260,13 @@ async fn main() -> Result<()> {
             command: CameraCommand::Set(patch),
             ..
         } => client.set_settings(&patch.into()).await,
-        Command::Config(_) => unreachable!(),
+        Command::Config(_)
+        | Command::Show
+        | Command::Ping { .. }
+        | Command::Camera {
+            command: CameraCommand::Ping,
+            ..
+        } => unreachable!(),
     }
     .with_context(|| format!("iris command at {endpoint}; check systemctl status irisd"))?;
     println!("{}", serde_json::to_string_pretty(&status)?);

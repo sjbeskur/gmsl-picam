@@ -21,7 +21,8 @@ async fn adjust_camera() -> Result<(), iris_client::ClientError> {
 }
 ```
 
-Methods return `DaemonStatus`, with requested settings separate from measured
+`ping().await` checks the daemon with an empty HTTP 204 response. Control
+methods return `DaemonStatus`, with requested settings separate from measured
 frame metadata. Setting acceptance is not hardware confirmation: inspect actual
 exposure/gain and camera state after subsequent frames. Errors distinguish invalid
 input, transport/decoding failures, and daemon responses with HTTP status/message.
@@ -52,7 +53,7 @@ iris camera front stop
 ```
 
 Profiles live in `~/.config/iris/config.toml` (or `$XDG_CONFIG_HOME/iris/config.toml`).
-`iris config --show` displays them; `--config` selects another file. Saves are
+`iris show` displays them; `--config` selects another file. Saves are
 atomic and private on Unix, preserve other profiles, and store token file paths
 rather than token values. Browser callers use the transport directly without the
 native filesystem module. A profile name identifies a connection to the one camera

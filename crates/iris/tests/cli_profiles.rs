@@ -67,6 +67,7 @@ fn configuration_is_saved_offline_and_named_commands_use_the_saved_endpoint_and_
     ]);
     dir.ok(&["config", "rear", "--endpoint", "http://127.0.0.1:9"]);
     let saved = dir.ok(&["config", "--show"]);
+    assert_eq!(dir.ok(&["show"]), saved);
     assert!(
         saved.contains("[cameras.front]")
             && saved.contains("[cameras.rear]")
@@ -117,4 +118,47 @@ fn configuration_is_saved_offline_and_named_commands_use_the_saved_endpoint_and_
         .status
         .success());
     assert_eq!(fs::read_to_string(config_path).unwrap(), "not [TOML");
+}
+
+#[test]
+fn ping_uses_default_or_named_profiles_without_writing_config() {
+    let dir = Temp::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    dir.ok(&["config", "--endpoint", &endpoint]);
+    dir.ok(&["config", "front", "--endpoint", &endpoint]);
+    let before = fs::read(dir.0.join("iris/config.toml")).unwrap();
+    let server = std::thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let size = socket.read(&mut buffer).unwrap();
+                assert!(size > 0);
+                request.extend_from_slice(&buffer[..size]);
+            }
+            assert!(request.starts_with(b"GET /ping "));
+            socket
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+    });
+    for command in [
+        &["ping"][..],
+        &["ping", "front"][..],
+        &["camera", "front", "ping"][..],
+    ] {
+        let output = dir.ok(command);
+        assert!(
+            output.starts_with(&format!("pong {endpoint} (")),
+            "{output}"
+        );
+        assert!(output.trim_end().ends_with(" ms)"));
+    }
+    server.join().unwrap();
+    assert_eq!(fs::read(dir.0.join("iris/config.toml")).unwrap(), before);
 }

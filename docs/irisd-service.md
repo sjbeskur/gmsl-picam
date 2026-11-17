@@ -16,6 +16,25 @@ are checked. No browser UI or application proxy is included yet.
 
 ## Build and install
 
+Install the native CLI on your workstation as a normal user:
+
+```bash
+just install-iris
+# Equivalent:
+cargo install --locked --path crates/iris --bin iris --no-default-features \
+  --features iris-client --root ~/.local --force
+```
+
+This installs `~/.local/bin/iris` without libcamera or the daemon. Ensure
+`~/.local/bin` is on PATH, then use `iris config` and `iris camera <name> ...`
+from any directory. The standard Cargo default is `~/.cargo/bin`; `--root ~/.local`
+selects the user-local utility directory instead. Override the recipe's root with
+`just install-iris /another/prefix` when needed.
+Run `iris --version` to print its Cargo package version. Re-running the install
+recipe rebuilds and replaces the utility, including when the version is unchanged.
+
+Build the ARM daemon and installation bundle separately:
+
 On the development host:
 
 ```bash
@@ -53,6 +72,7 @@ Save the connection once on the client machine:
 
 ```bash
 iris config front --endpoint http://192.168.50.150:8081 --token-file ~/.config/iris/token
+iris ping front
 iris camera front status
 iris camera front start
 iris camera front set --exposure-us 59000 --gain 1.5
@@ -60,8 +80,9 @@ iris camera front stop
 ```
 
 `iris config` with no arguments creates or updates a `default` profile, using
-localhost when there is no saved endpoint. `iris config --show` displays the saved
-TOML without changing it. The default path is `$XDG_CONFIG_HOME/iris/config.toml`
+localhost when there is no saved endpoint. `iris show` displays the saved TOML
+without changing it or connecting to the daemon; `iris config --show` remains
+available. The default path is `$XDG_CONFIG_HOME/iris/config.toml`
 or `~/.config/iris/config.toml`. Override it with `--config <path>` or `IRIS_CONFIG`.
 
 Example file:
@@ -96,6 +117,15 @@ iris camera local status
 iris camera local set --fps 15 --jpeg-quality 85
 iris camera local set --auto-exposure --auto-gain
 ```
+
+`iris ping` sends a small authenticated HTTP GET to `/ping` on the default
+connection. Use `iris ping front` or `iris camera front ping` for a named profile.
+It prints `pong <endpoint> (<round-trip> ms)` on success and exits nonzero on
+connection/authentication failure or a three-second timeout. The daemon responds
+with HTTP 204 and no body, even while capture is stopped or failed. This tests the
+control service and credentials without opening the camera or changing settings.
+It is an application-level TCP connection check, not an ICMP echo. The daemon
+must be updated to a version providing `/ping`; an older daemon returns 404.
 
 The original `iris status`, `iris start`, `iris stop`, and `iris set` remain
 compatible: they use the saved `default` profile or localhost when it is absent.
@@ -210,6 +240,7 @@ Control routes:
 
 | Method | Path | Result |
 | --- | --- | --- |
+| GET | `/ping` | Empty 204 connection/credential check; no capture changes |
 | GET | `/status` | Camera metadata, requested settings, capture worker state |
 | POST | `/camera/start` | Start capture, return current state |
 | POST | `/camera/stop` | Wait for camera cleanup, return stopped state |

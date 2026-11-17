@@ -9,6 +9,10 @@ default:
 build:
     cd "{{justfile_directory()}}" && ./scripts/build-rust-arm64.sh "{{artifact_dir}}"
 
+# Install the native client as ~/.local/bin/iris; no camera libraries or sudo needed.
+install-iris $install_root=(env("HOME") + "/.local"):
+    cd "{{justfile_directory()}}" && cargo install --locked --path crates/iris --bin iris --no-default-features --features iris-client --root "$install_root" --force
+
 # Copy the install bundle to the Pi; then run sudo bash /tmp/iris-install/install-irisd.sh.
 deploy-iris $host="192.168.50.150" $user="sbeskur":
     cd "{{justfile_directory()}}" && test -x "{{artifact_dir}}/irisd" && test -x "{{artifact_dir}}/iris"

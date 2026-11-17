@@ -225,6 +225,7 @@ pub fn validate_token(token: &str) -> Result<()> {
 /// trusted; other peers must authenticate, including for status reads.
 pub fn router_with_token(service: Arc<CameraService>, token: Option<String>) -> Router {
     Router::new()
+        .route("/ping", get(|| async { StatusCode::NO_CONTENT }))
         .route("/status", get(status))
         .route("/camera/start", post(start))
         .route("/camera/stop", post(stop))
@@ -588,5 +589,29 @@ mod tests {
             "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
         ));
         assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+    }
+    #[tokio::test]
+    async fn ping_succeeds_without_starting_or_changing_capture() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let service = Arc::new(CameraService::new(CameraConfig::default()).unwrap());
+        let response = router(Arc::clone(&service))
+            .oneshot(Request::builder().uri("/ping").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(axum::body::to_bytes(response.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
+        let status = service.status().unwrap();
+        assert_eq!(status.camera.camera_state, CameraState::Stopped);
+        assert!(!status.capture_active);
+        assert_eq!(status.camera.frame_count, 0);
+        let response = router_with_token(service, Some("0123456789abcdef0123456789abcdef".into()))
+            .oneshot(Request::builder().uri("/ping").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }
