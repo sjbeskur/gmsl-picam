@@ -1,0 +1,29 @@
+[Unit]
+Description=Iris HTTP live view gateway
+After=network.target irisd.service
+Wants=irisd.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=iris
+Group=iris
+RuntimeDirectory=iris-view
+RuntimeDirectoryMode=0750
+EnvironmentFile=-/etc/iris/iris-view.env
+ExecStart=/usr/local/bin/iris-view
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

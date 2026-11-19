@@ -5,7 +5,7 @@ usage() {
     cat <<'HELP'
 Usage: install-irisd.sh [artifact-directory] [--no-start] [--destdir directory]
 
-Install irisd, iris, and the systemd service. Run with sudo on the Pi.
+Install irisd, iris, iris-view, and their systemd services. Run with sudo on the Pi.
 Existing /etc/iris/irisd.env is preserved. By default, enable and restart irisd.
 --no-start installs without enabling or starting the service.
 --destdir stages files only; skips accounts, binary execution, and systemd.
@@ -40,7 +40,7 @@ if [[ -f "$script_dir/irisd.service" ]]; then
 else
     unit_dir="$script_dir/../deploy"
 fi
-for file in "$artifact_dir/irisd" "$artifact_dir/iris" "$unit_dir/irisd.service" "$unit_dir/irisd.env"; do
+for file in "$artifact_dir/irisd" "$artifact_dir/iris" "$artifact_dir/iris-view" "$unit_dir/irisd.service" "$unit_dir/irisd.env" "$unit_dir/iris-view.service" "$unit_dir/iris-view.env"; do
     [[ -f "$file" ]] || { echo "Missing install input: $file" >&2; exit 1; }
 done
 if [[ -n "$destdir" ]]; then
@@ -53,6 +53,7 @@ else
     # Fail before changing files if these binaries cannot run with this Pi's libraries.
     "$artifact_dir/irisd" --help >/dev/null
     "$artifact_dir/iris" --help >/dev/null
+    "$artifact_dir/iris-view" --help >/dev/null
     for group in video render; do
         getent group "$group" >/dev/null || groupadd --system "$group"
     done
@@ -62,33 +63,34 @@ else
     fi
 fi
 install -d -m 0755 "$destdir/usr/local/bin" "$destdir/etc/systemd/system" "$destdir/etc/iris"
-for binary in irisd iris; do
+for binary in irisd iris iris-view; do
     # Atomic replacement works even while the previous executable is running.
     temporary="$(mktemp "$destdir/usr/local/bin/.${binary}.XXXXXX")"
     install -m 0755 "$artifact_dir/$binary" "$temporary"
     mv -f "$temporary" "$destdir/usr/local/bin/$binary"
 done
-install -m 0644 "$unit_dir/irisd.service" "$destdir/etc/systemd/system/irisd.service"
+for unit in irisd iris-view; do
+    install -m 0644 "$unit_dir/$unit.service" "$destdir/etc/systemd/system/$unit.service"
+done
+if [[ ! -e "$destdir/etc/iris/iris-view.env" ]]; then
+    install -m 0644 "$unit_dir/iris-view.env" "$destdir/etc/iris/iris-view.env"
+fi
 if [[ ! -e "$destdir/etc/iris/irisd.env" ]]; then
     install -m 0644 "$unit_dir/irisd.env" "$destdir/etc/iris/irisd.env"
 fi
-# Preserve the remote credential across upgrades. Never print it in install logs.
-if [[ ! -e "$destdir/etc/iris/control.token" ]]; then
-    (umask 0077; od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$destdir/etc/iris/control.token")
-fi
-chmod 0640 "$destdir/etc/iris/control.token"
-if [[ -z "$destdir" ]]; then
-    chown root:iris /etc/iris/control.token
+# Preserve camera defaults while giving upgraded installations a viewer output.
+if ! grep -q '^IRIS_TRANSMIT=' "$destdir/etc/iris/irisd.env"; then
+    printf '\nIRIS_TRANSMIT=tcp://127.0.0.1:9001\n' >> "$destdir/etc/iris/irisd.env"
 fi
 if [[ -z "$destdir" ]]; then
     systemctl daemon-reload
     if "$start_service"; then
-        systemctl enable irisd.service
-        systemctl restart irisd.service
-        systemctl --no-pager --full status irisd.service
+        systemctl enable irisd.service iris-view.service
+        systemctl restart irisd.service iris-view.service
+        systemctl --no-pager --full status irisd.service iris-view.service
     fi
 else
     echo "Staged service files under $destdir; no accounts or services changed."
 fi
 echo "Installed. Camera: iris status | iris start | iris stop | iris set --gain 1.5"
-echo "Daemon: sudo systemctl stop irisd; logs: journalctl -u irisd -f"
+echo "Services: sudo systemctl stop irisd iris-view; logs: journalctl -u irisd -u iris-view -f"

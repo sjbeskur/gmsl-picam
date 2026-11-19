@@ -7,20 +7,20 @@ import socket
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 
 def check_session(binary, exposure, gain, log):
-    with socket.socket() as probe:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    base = f"http://127.0.0.1:{port}"
+    control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    control.connect(("127.0.0.1", port))
+    control.settimeout(.2)
     with log.open("wb") as output:
         process = subprocess.Popen(
-            [str(binary), "--bind", f"127.0.0.1:{port}", "--exposure-us", str(exposure),
-             "--control-bind", "127.0.0.1:0", "--gain", str(gain), "--width", "1280", "--height", "720"],
+            [str(binary), "--no-transmit", "--exposure-us", str(exposure),
+             "--control-bind", f"127.0.0.1:{port}", "--gain", str(gain), "--width", "1280", "--height", "720"],
             stdout=output, stderr=subprocess.STDOUT,
         )
         try:
@@ -30,9 +30,14 @@ def check_session(binary, exposure, gain, log):
                 if process.poll() is not None:
                     raise RuntimeError("irisd exited before capture")
                 try:
-                    with urllib.request.urlopen(base + "/status", timeout=2) as response:
-                        status = json.load(response)
-                except (urllib.error.URLError, TimeoutError):
+                    request_id = time.monotonic_ns()
+                    control.send(json.dumps({"version": 1, "request_id": request_id, "command": {"type": "status"}}).encode())
+                    response = json.loads(control.recv(4097))
+                    if response["request_id"] != request_id:
+                        continue
+                    assert response["result"]["type"] == "status", response
+                    status = response["result"]["data"]["camera"]
+                except (ConnectionRefusedError, TimeoutError):
                     time.sleep(0.1)
                     continue
                 if status["camera_state"] == "Failed":
@@ -44,17 +49,13 @@ def check_session(binary, exposure, gain, log):
                     if first_timestamp is None:
                         first_timestamp = timestamp
                     elif timestamp > first_timestamp and status["frame_count"] >= 10:
-                        with urllib.request.urlopen(base + "/frame.jpg", timeout=2) as response:
-                            jpeg = response.read()
-                            assert response.headers["Content-Type"] == "image/jpeg"
-                            assert response.headers["Cache-Control"] == "no-store"
-                            assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
                         print(json.dumps(status))
                         break
                 time.sleep(0.1)
             else:
                 raise RuntimeError("No advancing capture within 15 seconds")
         finally:
+            control.close()
             if process.poll() is None:
                 process.send_signal(signal.SIGTERM)
                 try:

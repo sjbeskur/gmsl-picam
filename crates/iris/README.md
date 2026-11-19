@@ -54,16 +54,18 @@ GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
         --exposure-us 8000   # 0 = leave auto-exposure enabled
 ```
 
-### `irisd` daemon and `iris` client
+### `irisd` daemon, `iris` client, and `iris-view` gateway
 
 Install the native CLI into `~/.local/bin` with `just install-iris`.
 This requires neither sudo nor camera libraries on the workstation.
 
-`irisd` captures the selected IMX477 and serves `/status`, `/frame.jpg`, and
-`/stream.mjpg`. `iris` communicates with its local control API:
+`irisd` captures the selected IMX477, accepts UDP commands, and can transmit image
+postcards over TCP or a Unix socket through the `Transmitter` trait. The optional
+`iris-view` gateway serves `/status`, `/frame.jpg`, and `/stream.mjpg` over HTTP.
+`iris` communicates directly with the daemon over UDP:
 
 ```bash
-iris config front --endpoint http://192.168.50.150:8081 --token-file ~/.config/iris/token
+iris config front --endpoint udp://192.168.50.150:8081
 iris camera front status
 iris camera front start
 iris camera front set --exposure-us 59000 --gain 1.5
@@ -79,8 +81,10 @@ For a manual development session:
 
 ```bash
 cargo build --bin irisd --features iris-service
-cargo build --bin iris --features iris-client
-./target/debug/irisd --exposure-us 59000 --gain 1.5
+cargo build --bin iris --bin iris-view --features iris-client,iris-view
+# Start these in separate terminals:
+./target/debug/iris-view
+./target/debug/irisd --transmit tcp://127.0.0.1:9001 --exposure-us 59000 --gain 1.5
 # In another terminal:
 ./target/debug/iris status
 ```
@@ -88,6 +92,30 @@ cargo build --bin iris --features iris-client
 ---
 
 ## Dependencies
+
+### JPEG encoding and performance benchmark
+
+The [NV12 and buffer-copy explanation](<../../docs/journey of a photon.md#what-nv12-looks-like>)
+includes the memory layout, implementation snippets, and measured Pi results.
+
+The daemon statically builds libjpeg-turbo with SIMD support. Source builds need
+CMake and a C compiler; x86 builds also need NASM. The cross-build Docker image
+includes these tools, and the Pi does not need an extra runtime JPEG package.
+
+```bash
+sudo apt-get install -y build-essential cmake nasm
+cargo run --release --example jpeg_benchmark --features jpeg-support -- 50
+```
+
+Run this benchmark on the Pi to compare the previous floating-point/image-rs
+pipeline against the reusable fixed-point/TurboJPEG encoder at 1280×720 and
+quality 85. Its synthetic image is deliberately textured, so timings differ from
+live camera scenes. It does not open the camera. To measure a running daemon's
+CPU, publication rate, and estimated sensor-to-publication age on the Pi:
+
+```bash
+python3 scripts/measure-iris-performance.py --pid "$(systemctl show -p MainPID --value irisd)"
+```
 
 ### libcamera example
 
@@ -157,7 +185,7 @@ and compute CoI from `controls::SensorTimestamp` and `controls::ExposureTime`.
 
 ## Service reliability and metadata
 
-`/frame.jpg` and new `/stream.mjpg` connections return HTTP 503 when capture
+The `iris-view` routes `/frame.jpg` and new `/stream.mjpg` connections return HTTP 503 when capture
 is unhealthy or the newest frame is over two seconds old. Existing MJPEG streams
 close on failure or expiry and send each frame at most once. Image responses use
 `Cache-Control: no-store`. `/status` includes `frame_age_ms` and `frame_stale`;
@@ -183,7 +211,7 @@ just deploy-iris
 
 Alternatively, pass `just artifact_dir=out/iris-arm64 build` and the same override
 to `deploy-iris`. The old positional `just build <directory>` is replaced by this
-shared variable. Cross-builds export `iris` and both examples to that directory.
+shared variable. Cross-builds export `iris`, `irisd`, `iris-view`, their service files, and the examples.
 
 On an idle Pi with the irisd binary, run the hardware restart check:
 
@@ -192,4 +220,4 @@ python3 scripts/check-iris-restart.py /tmp/irisd --exposure-us 59000 --gain 1.0
 ```
 
 The check starts two capture sessions in sequence, requires valid advancing
-sensor timestamps and a JPEG in each, and checks SIGTERM exit before restarting.
+sensor timestamps in each, and checks SIGTERM exit before restarting.

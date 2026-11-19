@@ -2,24 +2,28 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use gmsl_picam_rs::{
     camera::CameraConfig,
-    control::{self, CameraService},
-    http,
+    control::CameraService,
+    transmitter::{self, StreamEndpoint},
+    udp,
 };
-use std::{future::IntoFuture, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 use tracing::info;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "irisd",
-    about = "IMX477 camera daemon with authenticated TCP control"
+    version,
+    about = "Camera daemon with UDP commands and pluggable image output"
 )]
 struct Args {
-    #[arg(long, env = "IRIS_BIND", default_value = "0.0.0.0:8080")]
-    bind: SocketAddr,
-    #[arg(long, env = "IRIS_CONTROL_BIND", default_value = "127.0.0.1:8081")]
+    #[arg(long, env = "IRIS_CONTROL_BIND", default_value = "0.0.0.0:8081")]
     control_bind: SocketAddr,
-    #[arg(long, env = "IRIS_CONTROL_TOKEN_FILE")]
-    control_token_file: Option<std::path::PathBuf>,
+    /// Optional image receiver; tcp://IP:port or unix:///absolute/path.
+    #[arg(long, env = "IRIS_TRANSMIT")]
+    transmit: Option<StreamEndpoint>,
+    /// Disable image output, including an endpoint inherited from the environment.
+    #[arg(long, env = "IRIS_NO_TRANSMIT", default_value_t = false)]
+    no_transmit: bool,
     #[arg(long, env = "IRIS_CAMERA_INDEX", default_value_t = 0)]
     camera_index: usize,
     #[arg(long, env = "IRIS_WIDTH", default_value_t = 1280)]
@@ -38,7 +42,6 @@ struct Args {
     auto_gain: bool,
     #[arg(long, env = "IRIS_JPEG_QUALITY", default_value_t = 85)]
     jpeg_quality: u8,
-    /// Keep daemon running with capture initially stopped.
     #[arg(long, env = "IRIS_IDLE", default_value_t = false)]
     idle: bool,
 }
@@ -51,26 +54,9 @@ async fn main() -> Result<()> {
         )
         .init();
     let args = Args::parse();
-    let token = args
-        .control_token_file
-        .as_ref()
-        .map(|path| std::fs::read_to_string(path).context("cannot read control token file"))
-        .transpose()?
-        .map(|value| value.trim().to_owned());
-    if let Some(token) = &token {
-        control::validate_token(token)?;
-    }
-    anyhow::ensure!(
-        args.control_bind.ip().is_loopback() || token.is_some(),
-        "a control token file is required for non-loopback TCP control"
-    );
-    // Bind both listeners before starting capture so an occupied port cannot strand a worker.
-    let preview = tokio::net::TcpListener::bind(args.bind)
+    let commands = tokio::net::UdpSocket::bind(args.control_bind)
         .await
-        .context("failed to bind preview listener")?;
-    let commands = tokio::net::TcpListener::bind(args.control_bind)
-        .await
-        .context("failed to bind control listener")?;
+        .context("bind UDP command listener")?;
     let service = Arc::new(CameraService::new(CameraConfig {
         camera_index: args.camera_index,
         width: args.width,
@@ -80,19 +66,38 @@ async fn main() -> Result<()> {
         gain: (!args.auto_gain).then_some(args.gain),
         jpeg_quality: args.jpeg_quality,
     })?);
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let mut output = args.transmit.filter(|_| !args.no_transmit).map(|endpoint| {
+        tokio::spawn(transmitter::run(
+            endpoint.transmitter(),
+            Arc::clone(&service.frames),
+            receiver,
+        ))
+    });
     if !args.idle {
         service.start()?;
     }
-    info!(preview = %args.bind, control = %args.control_bind, "irisd listening");
+    info!(udp = %args.control_bind, "irisd listening");
+    let mut output_finished = false;
     let result = tokio::select! {
-        result = axum::serve(preview, http::router(Arc::clone(&service.frames))).into_future() => result.context("preview server failed"),
-        result = axum::serve(commands, control::router_with_token(Arc::clone(&service), token).into_make_service_with_connect_info::<SocketAddr>()).into_future() => result.context("control server failed"),
+        result = udp::serve(commands, Arc::clone(&service)) => result.context("UDP command listener failed"),
+        result = async {
+            match output.as_mut() {
+                Some(task) => task.await.context("image output task panicked")?.context("image output failed"),
+                None => std::future::pending::<Result<()>>().await,
+            }
+        } => { output_finished = true; result },
         result = shutdown_signal() => result,
     };
-    // Drop HTTP connections, then stop and join capture independently of open MJPEG clients.
+    shutdown.send_replace(true);
     tokio::task::spawn_blocking(move || service.shutdown())
         .await
         .context("shutdown task failed")??;
+    if !output_finished {
+        if let Some(output) = output {
+            output.await.context("image output task failed")??;
+        }
+    }
     result
 }
 
@@ -101,11 +106,8 @@ async fn shutdown_signal() -> Result<()> {
     {
         let mut terminate =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .context("failed to register SIGTERM handler")?;
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => result.context("Ctrl-C handler failed")?,
-            _ = terminate.recv() => {},
-        }
+                .context("register SIGTERM handler")?;
+        tokio::select! { result = tokio::signal::ctrl_c() => result.context("Ctrl-C handler failed")?, _ = terminate.recv() => {} }
     }
     #[cfg(not(unix))]
     tokio::signal::ctrl_c()

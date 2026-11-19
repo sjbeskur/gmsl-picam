@@ -10,58 +10,54 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CameraProfile {
     pub endpoint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_file: Option<PathBuf>,
+}
+
+impl<'de> Deserialize<'de> for CameraProfile {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LegacyProfile {
+            endpoint: String,
+            #[serde(default, rename = "token_file")]
+            _ignored_token_file: Option<serde::de::IgnoredAny>,
+        }
+        let profile = LegacyProfile::deserialize(deserializer)?;
+        Ok(Self {
+            endpoint: profile.endpoint,
+        })
+    }
 }
 impl Default for CameraProfile {
     fn default() -> Self {
         Self {
-            endpoint: "http://127.0.0.1:8081".into(),
-            token_file: None,
+            endpoint: "udp://127.0.0.1:8081".into(),
         }
     }
 }
 impl CameraProfile {
     pub fn validate(&self) -> Result<()> {
-        let endpoint =
-            reqwest::Url::parse(&self.endpoint).context("invalid camera endpoint URL")?;
+        let endpoint = url::Url::parse(&self.endpoint).context("invalid camera endpoint URL")?;
         anyhow::ensure!(
-            matches!(endpoint.scheme(), "http" | "https")
+            matches!(endpoint.scheme(), "udp" | "http" | "https")
                 && endpoint.host_str().is_some()
                 && endpoint.query().is_none()
                 && endpoint.fragment().is_none()
                 && endpoint.username().is_empty()
-                && endpoint.password().is_none(),
-            "endpoint must be an absolute HTTP(S) URL without credentials, query or fragment"
-        );
-        anyhow::ensure!(
-            self.token_file
-                .as_ref()
-                .is_none_or(|path| !path.as_os_str().is_empty()),
-            "token file path cannot be empty"
+                && endpoint.password().is_none()
+                && (endpoint.scheme() != "udp" || (endpoint.port().is_some() && matches!(endpoint.path(), "" | "/"))),
+            "endpoint must be an absolute UDP or HTTP(S) URL without credentials, query or fragment"
         );
         Ok(())
     }
 
-    /// Relative token paths in TOML resolve against the config file's directory.
-    pub fn client(&self, config_directory: &Path) -> Result<IrisClient> {
+    pub fn client(&self) -> Result<IrisClient> {
         self.validate()?;
-        let mut client = IrisClient::new(&self.endpoint)?;
-        if let Some(path) = &self.token_file {
-            let path = if path.is_absolute() {
-                path.clone()
-            } else {
-                config_directory.join(path)
-            };
-            let token = fs::read_to_string(&path)
-                .with_context(|| format!("cannot read token file {}", path.display()))?;
-            client = client.with_token(token.trim())?;
-        }
-        Ok(client)
+        Ok(IrisClient::new(&self.endpoint)?)
     }
 }
 
@@ -115,7 +111,7 @@ impl ClientConfig {
         toml::to_string_pretty(self).context("cannot serialize client configuration")
     }
 
-    /// Atomic replacement, with mode 0600 on Unix. No token contents are persisted.
+    /// Atomic replacement, with mode 0600 on Unix. Connection endpoints are persisted.
     pub fn save(&self, path: &Path) -> Result<()> {
         let text = self.to_toml()?;
         let parent = path
@@ -215,7 +211,6 @@ mod tests {
             "front".into(),
             CameraProfile {
                 endpoint: "http://192.168.50.150:8081".into(),
-                token_file: Some("front.token".into()),
             },
         );
         config.save(&path).unwrap();
@@ -225,10 +220,6 @@ mod tests {
             .insert("rear".into(), CameraProfile::default());
         loaded.save(&path).unwrap();
         assert_eq!(ClientConfig::load(&path).unwrap().cameras.len(), 2);
-        assert_eq!(
-            loaded.camera("front").unwrap().token_file.as_deref(),
-            Some(Path::new("front.token"))
-        );
         assert!(loaded.camera("missing").is_err());
         #[cfg(unix)]
         {
@@ -251,7 +242,6 @@ mod tests {
             "front".into(),
             CameraProfile {
                 endpoint: "file:///tmp/camera".into(),
-                token_file: None,
             },
         );
         assert!(config.save(&path).is_err());
@@ -259,15 +249,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relative_credentials_resolve_against_config_directory() {
+    async fn legacy_token_file_is_ignored_and_dropped_on_save() {
         let dir = Temp::new();
-        fs::write(dir.0.join("token"), "some-private-token\n").unwrap();
-        let profile = CameraProfile {
-            token_file: Some("token".into()),
-            ..Default::default()
-        };
-        let client = profile.client(&dir.0).unwrap();
-        assert!(!format!("{client:?}").contains("some-private-token"));
-        assert!(profile.client(&dir.0.join("wrong")).is_err());
+        let path = dir.0.join("config.toml");
+        fs::write(
+            &path,
+            r#"[cameras.front]
+endpoint = "udp://127.0.0.1:8081"
+token_file = "/missing/old-token"
+"#,
+        )
+        .unwrap();
+        let config = ClientConfig::load(&path).unwrap();
+        config.camera("front").unwrap().client().unwrap();
+        config.save(&path).unwrap();
+        assert!(!fs::read_to_string(path).unwrap().contains("token_file"));
     }
 }

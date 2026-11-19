@@ -1,18 +1,29 @@
 # Iris daemon and camera control
 
-`irisd` owns the camera and serves the preview. systemd manages its process.
-`iris` is a small client that starts/stops capture and changes camera settings.
+`irisd` owns capture and listens for UDP camera commands. `iris` is the typed
+client CLI. The optional `iris-view` process receives image postcards and serves
+the browser preview. The camera daemon builds and runs without HTTP dependencies.
 
 ## Libraries and applications
 
-- `crates/iris-api`: shared wire types, settings validation, and status models.
-- `crates/iris-client`: async typed HTTP library, re-exporting the API types.
-- `crates/iris`: the `iris` CLI and `irisd` daemon. The CLI calls `IrisClient`;
-  the daemon uses `iris-api` without depending on the client transport.
+- `crates/photon-protocol`: versioned commands/replies, shared settings/status
+  models, and framing for image postcards (JPEG plus metadata). No socket or HTTP
+  dependency. `iris-api` remains a compatibility re-export for earlier callers.
+- `crates/iris-client`: typed async commands over native UDP, or HTTP to the
+  viewer gateway for browser/web applications. A UDP-only build needs no Reqwest.
+- `crates/iris`: `irisd`, `iris`, and `iris-view`, selected by separate features.
+  The public `Transmitter` trait lets processing output use different adapters.
 
-The [client library guide](../crates/iris-client/README.md) includes a reusable
-Rust example and browser WebAssembly/proxy guidance. Both native and wasm32 builds
-are checked. No browser UI or application proxy is included yet.
+```mermaid
+flowchart LR
+    CLI[iris / iris-client] -->|UDP commands + replies| D[irisd: camera + JPEG]
+    D -->|TCP or Unix: image + metadata| V[iris-view]
+    B[Browser] -->|HTTP: MJPEG / JPEG| V
+    V -->|UDP: browser control requests| D
+```
+
+The [client library guide](../crates/iris-client/README.md) covers native and
+browser use. The preview remains available without building a custom browser UI.
 
 ## Build and install
 
@@ -43,8 +54,8 @@ just build
 just deploy-iris
 ```
 
-The artifact directory includes `irisd`, `iris`, `irisd.service`, `irisd.env`, and
-`install-irisd.sh`, plus the capture examples. The deploy recipe copies the
+The artifact directory includes `irisd`, `iris`, `iris-view`, both systemd units
+and environment files, `install-irisd.sh`, and the capture/benchmark examples. The deploy recipe copies the
 install bundle to `/tmp/iris-install` on the Pi (default `192.168.50.150`).
 
 Stop any previous manually launched camera process before installation, so it
@@ -56,10 +67,12 @@ sudo bash /tmp/iris-install/install-irisd.sh
 iris status
 ```
 
-The installer checks that both binaries run with the Pi's libraries, installs
+The installer checks that all three binaries run with the Pi's libraries, installs
 binaries atomically under `/usr/local/bin`, creates the `iris` system account,
-and installs/enables/restarts `irisd.service`. The service has camera access via
-`video` and `render` groups. Existing `/etc/iris/irisd.env` is preserved on upgrades.
+and installs/enables/restarts `irisd.service` and `iris-view.service`. The service has camera access via
+`video` and `render` groups. Existing `/etc/iris/irisd.env` is preserved on upgrades, with a default
+`IRIS_TRANSMIT=tcp://127.0.0.1:9001` added if missing. `/etc/iris/iris-view.env`
+is created once and preserved thereafter.
 The libcamera shared libraries are external prerequisites; this script does not
 replace them.
 
@@ -71,7 +84,7 @@ without root or system changes, use `--destdir /tmp/iris-package`.
 Save the connection once on the client machine:
 
 ```bash
-iris config front --endpoint http://192.168.50.150:8081 --token-file ~/.config/iris/token
+iris config front --endpoint udp://192.168.50.150:8081
 iris ping front
 iris camera front status
 iris camera front start
@@ -89,12 +102,10 @@ Example file:
 
 ```toml
 [cameras.front]
-endpoint = "http://192.168.50.150:8081"
-token_file = "/home/user/.config/iris/token"
+endpoint = "udp://192.168.50.150:8081"
 
 [cameras.rear]
-endpoint = "http://192.168.50.151:8081"
-token_file = "/home/user/.config/iris/rear.token"
+endpoint = "udp://192.168.50.151:8081"
 ```
 
 Names are connection aliases for the camera owned by each daemon. Each daemon
@@ -103,29 +114,26 @@ capture worker or switch sensors on a daemon. Multiple aliases can refer to the
 same daemon. Use letters, digits, `-`, `_`, or `.` in names.
 
 Config saves preserve other camera profiles and replace the file atomically with
-Unix mode 0600. Only credential-file paths are saved; raw bearer tokens are never
-written to TOML. Token paths supplied on the command line are saved as absolute
-paths. Relative paths written manually in TOML resolve against its directory.
-Malformed configuration is reported and preserved. A profile's endpoint/token
-can be overridden for a command with the existing connection flags/environment.
+Unix mode 0600. Only endpoints are needed. Old `token_file` entries are ignored
+without reading the referenced file, and removed the next time config is saved.
+Malformed configuration is reported and preserved. Connection flags/environment
+can override a profile's endpoint for a command.
 
 For local use on the Pi, configure its own alias without credentials:
 
 ```bash
-iris config local --endpoint http://127.0.0.1:8081
+iris config local --endpoint udp://127.0.0.1:8081
 iris camera local status
 iris camera local set --fps 15 --jpeg-quality 85
 iris camera local set --auto-exposure --auto-gain
 ```
 
-`iris ping` sends a small authenticated HTTP GET to `/ping` on the default
-connection. Use `iris ping front` or `iris camera front ping` for a named profile.
-It prints `pong <endpoint> (<round-trip> ms)` on success and exits nonzero on
-connection/authentication failure or a three-second timeout. The daemon responds
-with HTTP 204 and no body, even while capture is stopped or failed. This tests the
-control service and credentials without opening the camera or changing settings.
-It is an application-level TCP connection check, not an ICMP echo. The daemon
-must be updated to a version providing `/ping`; an older daemon returns 404.
+`iris ping` sends a small Photon ping command to the default connection. Use
+`iris ping front` or `iris camera front ping` for a named profile. It prints
+`pong <endpoint> (<round-trip> ms)` on success. This checks the control service
+without starting, stopping, or inspecting capture. UDP requests retry for up to
+12 seconds; saved HTTP profiles instead use the viewer's `/ping` route, which
+returns HTTP 204 after confirming the daemon's UDP reply.
 
 The original `iris status`, `iris start`, `iris stop`, and `iris set` remain
 compatible: they use the saved `default` profile or localhost when it is absent.
@@ -181,7 +189,83 @@ in the foreground, handles SIGTERM/Ctrl-C, and waits for capture cleanup on exit
 The unit restarts a failed daemon process, with rate limits; stopping just the
 camera intentionally does not trigger a service restart.
 
-## Preview and local control API
+## UDP commands and image postcards
+
+Commands are unauthenticated UDP datagrams on port 8081. The first protocol
+version uses bounded UTF-8 JSON; raw Rust struct memory is never sent. Example:
+
+```json
+{"version":1,"request_id":42,"command":{"type":"start"}}
+```
+
+Command types are `ping`, `status`, `start`, `stop`, and `settings`. A settings
+command carries a `settings` object with the existing `SettingsPatch` fields.
+Each reply echoes `version` and `request_id`; `result.type` is `pong`, `status`,
+or `error`. Status data is under `result.data`; errors contain a code (`invalid`,
+`conflict`, or `unavailable`) and message there.
+
+The native client retries the identical packet every 400 ms for up to 12 seconds.
+The daemon caches the last 256 responses for up to 30 seconds, keyed by source
+address/port and request ID. An exact duplicate returns its cached reply; reusing
+an ID with different bytes is rejected. This handles normal lost replies but
+does not promise exactly-once execution after cache eviction or process restart.
+A timeout leaves the command outcome unknown; inspect status before deciding
+what to do next. Await replies before sending dependent commands: UDP does not
+preserve ordering. A successful start acknowledges the request; advancing frames
+confirm that the hardware actually started.
+
+Commands are limited to 1200 bytes and replies to 4096 bytes. Malformed, oversized,
+unknown-command, and unsupported-version datagrams are discarded without changing
+capture. Settings values are validated by the same serialized controller.
+
+An image postcard contains JPEG bytes plus `FrameMetadata`. TCP and Unix streams
+use this 16-byte header, followed by JSON metadata and then the raw JPEG payload:
+
+| Offset | Field | Encoding |
+| --- | --- | --- |
+| 0 | Magic `PHTN` | 4 bytes |
+| 4 | Protocol version, currently 1 | big-endian u16 |
+| 6 | Image encoding, 1 = JPEG | big-endian u16 |
+| 8 | Metadata byte length | big-endian u32 |
+| 12 | JPEG byte length | big-endian u32 |
+
+Metadata is limited to 16 KiB and a JPEG to 32 MiB; the receiver checks lengths
+before allocating. Stream reads handle partial packets and consecutive frames.
+Metadata timestamps are preserved unchanged. The metadata `pixel_format` describes
+the source camera output (NV12); the header identifies the transmitted JPEG.
+The word postcard here names the image message, not the Rust `postcard` codec.
+
+`Transmitter::transmit(&mut self, &ImagePostcard)` is implemented by
+`TcpTransmitter` and `UnixTransmitter`. Output runs outside capture, with one
+latest-frame slot, bounded connect/write waits, and reconnection. Slow or absent
+receivers can miss frames; they do not stall capture or grow an application queue.
+Failed partial stream writes discard that connection to preserve framing.
+
+Manual processes (separate terminals):
+
+```bash
+cargo build --bin irisd --features iris-service
+cargo build --bin iris-view --bin iris --features iris-view,iris-client
+iris-view --listen tcp://127.0.0.1:9001
+irisd --idle --transmit tcp://127.0.0.1:9001
+iris --endpoint udp://127.0.0.1:8081 start
+```
+
+For Unix sockets use the same `unix:///absolute/path/images.sock` endpoint for
+`iris-view --listen` and `irisd --transmit`. Start the viewer first; the transmitter
+will also reconnect if it starts earlier. Existing socket paths are never removed
+at bind time; an orderly viewer shutdown removes only its own socket.
+
+Installed services have separate private `/tmp` namespaces. Use
+`unix:///run/iris-view/images.sock` for both services: `iris-view.service` creates
+that runtime directory. Edit `IRIS_VIEW_LISTEN` and `IRIS_TRANSMIT` in their
+respective environment files, then restart both units.
+
+To run headless, use `irisd --no-transmit` or set `IRIS_NO_TRANSMIT=true`, and
+disable the optional viewer with `sudo systemctl disable --now iris-view`.
+A daemon with no `--transmit`/`IRIS_TRANSMIT` also has no image output.
+
+## HTTP live view and browser control
 
 Preview remains available at:
 
@@ -189,58 +273,29 @@ Preview remains available at:
 - `http://192.168.50.150:8080/frame.jpg`
 - `http://192.168.50.150:8080/status` (camera metadata)
 
-The installed service listens for control on TCP port 8081. The installer
-creates a random bearer token in `/etc/iris/control.token` (root/iris, mode 0640),
-preserves it across upgrades, and sets `IRIS_CONTROL_TOKEN_FILE` in the environment
-file. Remote peers must authenticate for status and commands. Local loopback
-connections trust local OS users, so `iris status` still works on the Pi.
-A manually started daemon defaults to loopback; non-loopback binds require a
-valid token file before the listener is opened.
+`iris-view` hosts preview HTTP on TCP port 8080 and browser control HTTP on TCP
+port 8081. `irisd` owns UDP port 8081, so these listeners can use the same port
+number independently. The default postcard stream uses TCP loopback port 9001.
 
-To provision a remote client, first copy the token to a private file accessible
-to your Pi login. On the Pi:
+Saved `http://...:8081` profiles still work through the gateway; direct native
+clients should use `udp://...:8081` to control capture independently of the viewer.
+Browsers use HTTP through the gateway because they cannot open ordinary UDP
+sockets. Existing token-file entries are ignored; this home-development setup
+uses no command credentials. Old `IRIS_BIND` settings belong to the earlier
+combined daemon; configure `IRIS_VIEW_BIND` in `/etc/iris/iris-view.env` instead.
+For custom command bind addresses/ports, set `IRIS_VIEW_COMMAND_ENDPOINT` to a
+reachable matching UDP address, and adjust the viewer's HTTP ports as desired.
 
-```bash
-sudo install -m 0600 -o "$USER" /etc/iris/control.token "$HOME/iris-control.token"
-```
-
-On the client machine:
-
-```bash
-mkdir -p ~/.config/iris
-scp sbeskur@192.168.50.150:iris-control.token ~/.config/iris/token
-chmod 600 ~/.config/iris/token
-iris --address 192.168.50.150:8081 --token-file ~/.config/iris/token status
-iris --address 192.168.50.150:8081 --token-file ~/.config/iris/token set --gain 1.5
-```
-
-For subsequent commands:
-
-```bash
-export IRIS_CONTROL_ADDRESS=192.168.50.150:8081
-export IRIS_TOKEN_FILE="$HOME/.config/iris/token"
-iris start
-iris stop
-```
-
-The library exposes `IrisClient::new("http://192.168.50.150:8081")?.with_token(&token)?`.
-The client also accepts `IRIS_TOKEN`; a private token file avoids command-line
-secrets. Debug output redacts its authorization header.
-
-This is HTTP/JSON over TCP; UDP is not implemented. Direct service HTTP is for
-trusted LAN connections. For an untrusted network, carry it over SSH forwarding
-or an authenticated HTTPS proxy. A browser application still needs its proxy/CORS
-integration; the daemon does not enable general cross-origin browser access.
-
-Existing environment files are preserved on upgrade. To enable remote commands
-on an older loopback-only installation, set `IRIS_CONTROL_BIND=0.0.0.0:8081` and
-`IRIS_CONTROL_TOKEN_FILE=/etc/iris/control.token`, then restart the service.
+The gateway checks freshness using local time since image receipt. It closes
+streams when its publisher disconnects or no fresh frame arrives for two seconds;
+this does not equate remote clocks or measure optical end-to-end latency.
+Restarting `iris-view` leaves `irisd` capture running, and images reconnect.
 
 Control routes:
 
 | Method | Path | Result |
 | --- | --- | --- |
-| GET | `/ping` | Empty 204 connection/credential check; no capture changes |
+| GET | `/ping` | Empty 204 connection check; no capture changes |
 | GET | `/status` | Camera metadata, requested settings, capture worker state |
 | POST | `/camera/start` | Start capture, return current state |
 | POST | `/camera/stop` | Wait for camera cleanup, return stopped state |
@@ -255,7 +310,7 @@ curl -H 'X-Iris-Control: 1' -H 'Content-Type: application/json' \
   -X PATCH -d '{"gain":1.5}' http://127.0.0.1:8081/settings
 ```
 
-Missing/wrong remote credentials return 401. Invalid values return 400; geometry changes during capture return 409. Missing
+Invalid values return 400; geometry changes during capture return 409. Missing
 or malformed JSON is rejected by the API. Capture errors are reported as `Failed`;
 preview responses reject stale/unhealthy frames with 503. Camera status includes
 `Stopped`, `Starting`, `Running`, `Stopping`, `Degraded`, and `Failed`.
@@ -265,20 +320,29 @@ preview responses reject stale/unhealthy frames with 503. Camera status includes
 Non-hardware tests:
 
 ```bash
-cargo test --features http-support,jpeg-support,iris-client
+cargo test --workspace --features gmsl-picam-rs/iris-view,gmsl-picam-rs/jpeg-support,gmsl-picam-rs/iris-client
 ```
 
-On an idle Pi with both binaries in the provided directory:
+On an idle Pi with all three binaries in the provided directory:
 
 ```bash
-python3 scripts/check-irisd-control.py /tmp/iris-install
+python3 scripts/check-photon-stack.py /tmp/iris-install
+# Isolate transport/restart validation at the established camera baseline:
+python3 scripts/check-photon-stack.py /tmp/iris-install --restart-baseline
 python3 scripts/check-iris-restart.py /tmp/iris-install/irisd
-# On a separate host, against an idle authenticated daemon:
+# On a separate host, against an idle daemon:
 python3 scripts/check-iris-remote.py target/debug/iris \
-  --address 192.168.50.150:8081 --token-file ~/.config/iris/token
+  --address 192.168.50.150:8081
 ```
 
-The control check starts an idle daemon, starts capture, changes exposure/gain
-live, checks actual metadata and advancing frame count, rejects invalid/conflicting
-settings, stops capture and checks 503, and starts capture again in the same
-daemon process. The restart check tests full daemon shutdown/restart separately.
+The stack check tests UDP commands and settings validation, image metadata and
+JPEG delivery, both TCP and Unix transmitters, viewer restart/reconnection during
+capture, live controls, stale-image rejection, camera stop/start, and SIGTERM
+cleanup. It reports daemon/viewer CPU and delivered frame rate separately. The
+restart check exercises the HTTP-free daemon through two full capture sessions.
+
+The default stack check restarts capture at its live-test settings (45000 us,
+gain 2.0). On 2026-11-18 that restart failed after otherwise healthy capture.
+The explicit `--restart-baseline` variant restores 59000 us / gain 1.5 before
+stop/start; both TCP and Unix runs passed with that option. It preserves the
+original regression check rather than treating the 45000 us failure as resolved.

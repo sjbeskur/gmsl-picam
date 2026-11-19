@@ -8,7 +8,7 @@ There is no dependency on libcamera, the daemon package, Axum, or Clap.
 use iris_client::{IrisClient, SettingsPatch};
 
 async fn adjust_camera() -> Result<(), iris_client::ClientError> {
-    let camera = IrisClient::new("http://127.0.0.1:8081")?;
+    let camera = IrisClient::new("udp://127.0.0.1:8081")?;
     camera.start().await?;
     camera.set_settings(&SettingsPatch {
         exposure_us: Some(59000),
@@ -21,18 +21,23 @@ async fn adjust_camera() -> Result<(), iris_client::ClientError> {
 }
 ```
 
-`ping().await` checks the daemon with an empty HTTP 204 response. Control
-methods return `DaemonStatus`, with requested settings separate from measured
-frame metadata. Setting acceptance is not hardware confirmation: inspect actual
-exposure/gain and camera state after subsequent frames. Errors distinguish invalid
-input, transport/decoding failures, and daemon responses with HTTP status/message.
-The library attaches the required mutation header and validates patches before
-serialization (including rejection of non-finite gain values).
+`ping().await` sends a versioned UDP command and waits for its matching reply.
+Native clients retry identical requests for up to 12 seconds. A timeout reports
+an unknown outcome; query status before making a dependent decision. Commands
+return requested settings separately from actual measured frame metadata.
+Patches are validated before transmission, and daemon errors retain their
+invalid/conflict/unavailable distinctions.
 
-`iris-api` owns shared `CameraSettings`, `SettingsPatch`, and status/metadata types
-plus validation. These types are re-exported here for callers. The daemon depends
-on the shared types, not on the HTTP client. CLI-only argument parsing stays in
-the `iris` executable.
+`photon-protocol` owns the command, reply, metadata, and settings types. `iris-api`
+is a compatibility re-export. The camera daemon depends on the protocol, while
+this library selects the transport and keeps CLI parsing out of the protocol.
+
+Default features enable `udp` and `http`. Native backends that do not need HTTP
+can avoid Reqwest entirely:
+
+```toml
+iris-client = { path = "../iris-client", default-features = false, features = ["udp", "config"] }
+```
 
 ## Saved native profiles
 
@@ -43,52 +48,51 @@ iris-client = { path = "../iris-client", features = ["config"] }
 ```
 
 `iris_client::config::{ClientConfig, CameraProfile, default_config_path}` provides
-load/save, validation, named profile lookup, and client construction with saved
-credential references. The CLI uses this same implementation:
+load/save, validation, named profile lookup, and client construction with saved endpoints. The CLI uses this same implementation:
 
 ```bash
-iris config front --endpoint http://192.168.50.150:8081 --token-file ~/.config/iris/token
+iris config front --endpoint udp://192.168.50.150:8081
 iris camera front start
 iris camera front stop
 ```
 
 Profiles live in `~/.config/iris/config.toml` (or `$XDG_CONFIG_HOME/iris/config.toml`).
 `iris show` displays them; `--config` selects another file. Saves are
-atomic and private on Unix, preserve other profiles, and store token file paths
-rather than token values. Browser callers use the transport directly without the
+atomic and private on Unix and preserve other profiles. Legacy token-file
+references are ignored and removed on the next save. Browser callers use the transport directly without the
 native filesystem module. A profile name identifies a connection to the one camera
 currently owned by its daemon.
 
 ## Direct remote control
 
 ```rust,no_run
-# async fn example(token: &str) -> Result<(), iris_client::ClientError> {
-let camera = iris_client::IrisClient::new("http://192.168.50.150:8081")?
-    .with_token(token)?;
+# async fn example() -> Result<(), iris_client::ClientError> {
+let camera = iris_client::IrisClient::new("udp://192.168.50.150:8081")?;
+camera.ping().await?;
 let status = camera.status().await?;
 # Ok(()) }
 ```
 
-Remote status and mutations require the daemon's bearer token. The library sends
-it automatically and redacts it from Debug output. Local loopback clients may
-omit it. Obtain credentials through the installation procedure in the
-[service guide](../../docs/irisd-service.md).
+The home-development daemon accepts remote UDP commands without credentials.
+See the [wire format and retry limits](../../docs/irisd-service.md#udp-commands-and-image-postcards).
 
 ## Web applications
 
 - Rust backend: call async methods from its existing Tokio runtime. Configure a
-  different transport with `IrisClient::with_http_client` when needed.
+  UDP endpoint to talk directly to `irisd`, or `IrisClient::with_http_client`
+  when using the optional HTTP gateway.
 - Browser WebAssembly: `cargo check -p iris-client --target wasm32-unknown-unknown`
   verifies the browser build. reqwest uses Fetch in this target. Pass an absolute
   URL for a same-origin backend proxy, e.g. `https://app.example/api/iris`.
 - The base URL may include a proxy prefix. The client preserves that prefix for
   every API route. The proxy must forward `X-Iris-Control: 1` and enforce the web
   application's authentication/access policy.
-- The daemon requires a token for direct remote TCP control; it has no browser CORS routes.
+- `iris-view` exposes the HTTP routes and forwards commands to the daemon over UDP.
+  Saved HTTP profiles remain supported. The gateway has no general CORS routes.
   A browser UI and authenticated proxy are separate application work, not supplied
   by this crate.
-- Native defaults use direct HTTP without TLS/proxy features and a 12-second
-  timeout. For a native HTTPS backend, enable a TLS feature on the application's
+- The default endpoint is `udp://127.0.0.1:8081`. Native HTTP endpoints use
+  direct HTTP without TLS/proxy features and a 12-second timeout. For a native HTTPS backend, enable a TLS feature on the application's
   reqwest 0.12 dependency and pass its configured client. Browser HTTPS uses the
   browser's transport.
 

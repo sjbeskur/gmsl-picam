@@ -1,4 +1,4 @@
-use crate::frame_store::FrameStore;
+use crate::frame_store::{FrameStore, MAX_FRAME_AGE};
 use axum::extract::State;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -6,8 +6,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio_stream::wrappers::IntervalStream;
+use tokio_stream::wrappers::WatchStream;
 use tokio_stream::StreamExt;
 
 pub const MJPEG_BOUNDARY: &str = "iris";
@@ -42,12 +41,17 @@ async fn frame_handler(State(store): State<Arc<FrameStore>>) -> Response {
 }
 
 async fn stream_handler(State(store): State<Arc<FrameStore>>) -> Response {
+    // Subscribe before reading the frame so an intervening publication is not lost.
+    // Watch coalesces updates for slow viewers instead of queueing old frames.
+    let changes = store.subscribe();
     if store.fresh_frame().is_none() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let mut last_index = None;
-    let stream = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
-        .map(move |_| {
+    let stream = WatchStream::new(changes)
+        .timeout(MAX_FRAME_AGE)
+        .map(move |change| {
+            change.ok()?;
             let frame = store.fresh_frame()?;
             if last_index == Some(frame.metadata.frame_index) {
                 return Some(None);
@@ -87,6 +91,7 @@ fn multipart_chunk(jpeg: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::frame_store::{CameraState, FrameMetadata};
+    use std::time::Duration;
     fn sample_metadata() -> FrameMetadata {
         FrameMetadata {
             frame_index: 1,
@@ -224,5 +229,34 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stream_delivers_newest_frame_immediately_and_expires_when_stalled() {
+        let store = Arc::new(FrameStore::new(CameraState::Starting, 1280, 720, "NV12"));
+        store.update_frame(vec![1], sample_metadata());
+        let mut chunks = stream_handler(State(Arc::clone(&store)))
+            .await
+            .into_body()
+            .into_data_stream();
+        chunks.next().await.unwrap().unwrap();
+        for index in 2..=20 {
+            let mut metadata = sample_metadata();
+            metadata.frame_index = index;
+            store.update_frame(vec![index as u8], metadata);
+        }
+        let newest = tokio::time::timeout(Duration::from_millis(1), chunks.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(newest.ends_with(&[20, b'\r', b'\n']));
+        // No periodic polling is needed, but a stalled producer still closes viewers.
+        assert!(
+            tokio::time::timeout(MAX_FRAME_AGE + Duration::from_millis(1), chunks.next())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

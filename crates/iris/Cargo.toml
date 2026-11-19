@@ -6,16 +6,16 @@ description = "Rust examples for GMSL IMX477 camera on Raspberry Pi 5"
 
 [dependencies]
 anyhow = "1"
-iris-api = { path = "../iris-api" }
+socket2 = { version = "0.6", optional = true }
+photon-protocol = { path = "../photon-protocol" }
 iris-client = { path = "../iris-client", features = ["config"], optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = { version = "0.7", optional = true }
 clap = { version = "4", features = ["derive", "env"], optional = true }
-image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"], optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net", "io-util"], optional = true }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 
 # libcamera direct bindings (example: libcamera_capture)
@@ -25,19 +25,23 @@ libcamera = { version = "0.7", optional = true }
 gstreamer     = { version = "0.25", optional = true }
 gstreamer-app = { version = "0.25", optional = true }
 gstreamer-video = { version = "0.25", optional = true }
+turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "require-simd"], optional = true }
 
 [features]
 default = []
 iris-client = ["dep:iris-client", "dep:clap", "dep:tokio", "dep:serde_json"]
 iris-service = [
-    "dep:axum",
     "dep:clap",
     "dep:libcamera",
-    "http-support",
+    "dep:tokio",
+    "frame-events",
     "jpeg-support",
 ]
-jpeg-support = ["dep:image"]
+jpeg-support = ["dep:turbojpeg"]
+frame-events = ["dep:tokio", "dep:tokio-stream", "dep:socket2"]
+iris-view = ["http-support", "dep:clap", "dep:iris-client"]
 http-support = [
+    "frame-events",
     "dep:axum",
     "dep:serde",
     "dep:serde_json",
@@ -66,4 +70,15 @@ name = "gstreamer_capture"
 required-features = ["gstreamer-example"]
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 tower = { version = "0.5", features = ["util"] }
+
+[[example]]
+name = "jpeg_benchmark"
+required-features = ["jpeg-support"]
+
+[[bin]]
+name = "iris-view"
+path = "src/bin/iris-view.rs"
+required-features = ["iris-view"]

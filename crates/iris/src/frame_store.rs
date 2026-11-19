@@ -3,17 +3,15 @@ use std::time::{Duration, Instant};
 
 pub const MAX_FRAME_AGE: Duration = Duration::from_secs(2);
 
-pub use iris_api::{CameraState, FrameMetadata, ServiceStatus};
+pub use photon_protocol::{CameraState, FrameMetadata, ServiceStatus};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct LatestFrame {
-    pub jpeg: Arc<[u8]>,
-    pub metadata: FrameMetadata,
-}
+pub type LatestFrame = photon_protocol::ImagePostcard;
 
 #[derive(Debug)]
 pub struct FrameStore {
     inner: RwLock<FrameStoreState>,
+    #[cfg(feature = "frame-events")]
+    changes: tokio::sync::watch::Sender<()>,
 }
 
 #[derive(Debug)]
@@ -32,6 +30,8 @@ impl FrameStore {
     ) -> Self {
         let pixel_format = pixel_format.into();
         Self {
+            #[cfg(feature = "frame-events")]
+            changes: tokio::sync::watch::channel(()).0,
             inner: RwLock::new(FrameStoreState {
                 status: ServiceStatus {
                     camera_state,
@@ -56,6 +56,13 @@ impl FrameStore {
             .into_inner()
             .expect("new store lock");
         *self.inner.write().expect("frame store lock poisoned") = fresh;
+        #[cfg(feature = "frame-events")]
+        self.changes.send_replace(());
+    }
+
+    #[cfg(feature = "frame-events")]
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+        self.changes.subscribe()
     }
 
     pub fn status(&self) -> ServiceStatus {
@@ -110,6 +117,9 @@ impl FrameStore {
             jpeg: Arc::from(jpeg.into()),
             metadata,
         });
+        drop(inner);
+        #[cfg(feature = "frame-events")]
+        self.changes.send_replace(());
     }
 
     pub fn set_camera_state(&self, camera_state: CameraState) {
@@ -118,6 +128,8 @@ impl FrameStore {
             .expect("frame store lock poisoned")
             .status
             .camera_state = camera_state;
+        #[cfg(feature = "frame-events")]
+        self.changes.send_replace(());
     }
 
     pub fn set_last_error(&self, last_error: impl Into<String>) {

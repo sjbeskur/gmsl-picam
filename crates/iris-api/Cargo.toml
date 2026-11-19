@@ -5,5 +5,4 @@ edition = "2021"
 description = "Shared camera settings and status types for irisd and its clients"
 
 [dependencies]
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
+photon-protocol = { path = "../photon-protocol", version = "0.1.0" }

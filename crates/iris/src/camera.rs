@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub use iris_api::CameraSettings as CameraConfig;
+pub use photon_protocol::CameraSettings as CameraConfig;
 
 pub fn captured_at_unix_ms() -> u64 {
     SystemTime::now()
@@ -219,7 +219,16 @@ fn run_capture_libcamera(
     }
     let mut applied_settings = config.clone();
 
-    cam.start(None).context("camera start() failed")?;
+    let mut jpeg_encoder = crate::jpeg::Nv12JpegEncoder::new()
+        .map_err(|err| anyhow::anyhow!("JPEG encoder initialization failed: {err:?}"))?;
+    // Seed the IPA/sensor before streaming. First-request controls alone arrive
+    // after pipeline startup, leaving startup exposure/frame timing at defaults.
+    let startup_controls = requests
+        .first()
+        .context("camera allocated no capture requests")?
+        .controls();
+    cam.start(Some(startup_controls))
+        .context("camera start() failed")?;
     // Always stop streaming before dropping request buffers, including on errors.
     let capture_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         || -> Result<()> {
@@ -317,7 +326,7 @@ fn run_capture_libcamera(
                             .context("missing NV12 chroma plane")?,
                     )
                 };
-                match crate::jpeg::encode_nv12_planes_to_jpeg(
+                match jpeg_encoder.encode(
                     crate::jpeg::Nv12Image {
                         width: actual_width,
                         height: actual_height,

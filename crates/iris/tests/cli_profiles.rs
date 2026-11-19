@@ -48,23 +48,21 @@ impl Drop for Temp {
 }
 
 #[test]
-fn configuration_is_saved_offline_and_named_commands_use_the_saved_endpoint_and_token() {
+fn configuration_is_saved_offline_and_named_commands_use_the_saved_endpoint() {
     let dir = Temp::new();
     dir.ok(&["config"]);
     let config_path = dir.0.join("iris/config.toml");
     assert!(config_path.is_file());
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    let token_path = dir.0.join("camera.token");
-    fs::write(&token_path, "test-credential\n").unwrap();
-    dir.ok(&[
-        "config",
-        "front",
-        "--endpoint",
-        &endpoint,
-        "--token-file",
-        token_path.to_str().unwrap(),
-    ]);
+    dir.ok(&["config", "front", "--endpoint", &endpoint]);
+    let legacy = fs::read_to_string(&config_path).unwrap()
+        + r#"
+[cameras.legacy]
+endpoint = "http://127.0.0.1:9"
+token_file = "/missing/ignored"
+"#;
+    fs::write(&config_path, legacy).unwrap();
     dir.ok(&["config", "rear", "--endpoint", "http://127.0.0.1:9"]);
     let saved = dir.ok(&["config", "--show"]);
     assert_eq!(dir.ok(&["show"]), saved);
@@ -73,7 +71,7 @@ fn configuration_is_saved_offline_and_named_commands_use_the_saved_endpoint_and_
             && saved.contains("[cameras.rear]")
             && saved.contains("[cameras.default]")
     );
-    assert!(!saved.contains("test-credential"));
+    assert!(!saved.contains("token_file"));
     assert!(!dir.run(&["camera", "missing", "start"]).status.success());
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
@@ -106,9 +104,7 @@ fn configuration_is_saved_offline_and_named_commands_use_the_saved_endpoint_and_
     assert!(requests[0].starts_with("POST /camera/start "));
     assert!(requests[1].starts_with("POST /camera/stop "));
     for request in requests {
-        assert!(request
-            .to_lowercase()
-            .contains("authorization: bearer test-credential"));
+        assert!(!request.to_lowercase().contains("authorization:"));
         assert!(request.to_lowercase().contains("x-iris-control: 1"));
     }
     // Malformed TOML is reported and preserved, rather than replaced with defaults.

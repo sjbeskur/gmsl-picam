@@ -28,9 +28,13 @@ git submodule update --remote libcamera
 
 ## Guides
 
-- [Iris daemon, systemd installation, and client commands](./irisd-service.md)
+- [Journey of a photon: optics, GMSL, PiSP, and Iris](<./journey of a photon.md>)
 
-- [Latest Iris session handoff (2026-11-16)](./iris-session-handoff.md)
+- [NV12 layout and why a reusable camera-buffer copy improves performance](<./journey of a photon.md#what-nv12-looks-like>)
+
+- [Iris UDP commands, image postcards, live view, and systemd installation](./irisd-service.md)
+
+- [Latest Iris session handoff](./iris-session-handoff.md)
 
 - [Ubuntu arm64 cross-build guide](./ubuntu-arm64-cross-build.md)
 - [Repeatable Pi 5 Ubuntu bring-up steps](./pi5-ubuntu-imx477-repeatable-steps.md)

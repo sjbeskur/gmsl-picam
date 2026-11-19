@@ -35,6 +35,11 @@ RUN dpkg --add-architecture arm64 && \
     apt-get update && apt-get install -y --no-install-recommends \
     # Cross-compilation toolchain (matches libcamera-aarch64-cross.ini)
     build-essential \
+    cmake \
+    nasm \
+    # Keep executable Python dependencies on the build host architecture.
+    python3:amd64 \
+    python3-minimal:amd64 \
     gcc-aarch64-linux-gnu \
     g++-aarch64-linux-gnu \
     # pkg-config (host binary, reads arm64 .pc files via PKG_CONFIG_LIBDIR)
@@ -104,10 +109,18 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build \
         --manifest-path crates/iris/Cargo.toml \
-        --bins \
+        --bin irisd \
         --release \
         --target aarch64-unknown-linux-gnu \
-        --features iris-service,iris-client && \
+        --features iris-service && \
+    cp target/aarch64-unknown-linux-gnu/release/irisd /tmp/ && \
+    cargo build \
+        --manifest-path crates/iris/Cargo.toml \
+        --bin iris --bin iris-view \
+        --example jpeg_benchmark \
+        --release \
+        --target aarch64-unknown-linux-gnu \
+        --features iris-view,iris-client,jpeg-support && \
     cargo build \
         --manifest-path crates/iris/Cargo.toml \
         --example libcamera_capture \
@@ -120,8 +133,9 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
         --release \
         --target aarch64-unknown-linux-gnu \
         --features gstreamer-example && \
-    cp target/aarch64-unknown-linux-gnu/release/irisd /tmp/ && \
+    cp target/aarch64-unknown-linux-gnu/release/iris-view /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/iris /tmp/ && \
+    cp target/aarch64-unknown-linux-gnu/release/examples/jpeg_benchmark /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/examples/libcamera_capture /tmp/ && \
     cp target/aarch64-unknown-linux-gnu/release/examples/gstreamer_capture /tmp/
 
@@ -129,8 +143,12 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 FROM scratch AS artifact
 COPY --from=build /tmp/iris  /
 COPY --from=build /tmp/irisd /
+COPY --from=build /tmp/iris-view /
+COPY --from=build /tmp/jpeg_benchmark /
 COPY deploy/irisd.service /
 COPY deploy/irisd.env /
+COPY deploy/iris-view.service /
+COPY deploy/iris-view.env /
 COPY scripts/install-irisd.sh /
 COPY --from=build /tmp/libcamera_capture  /
 COPY --from=build /tmp/gstreamer_capture  /

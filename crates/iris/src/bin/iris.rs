@@ -17,10 +17,6 @@ struct Cli {
     endpoint: Option<String>,
     #[arg(long, env = "IRIS_CONFIG", global = true)]
     config: Option<PathBuf>,
-    #[arg(long, env = "IRIS_TOKEN_FILE", global = true, conflicts_with = "token")]
-    token_file: Option<std::path::PathBuf>,
-    #[arg(long, env = "IRIS_TOKEN", hide_env_values = true, global = true)]
-    token: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -56,9 +52,6 @@ struct ConfigArgs {
     /// Show saved TOML without changing it.
     #[arg(long)]
     show: bool,
-    /// Remove the token-file reference from this profile.
-    #[arg(long)]
-    clear_token: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -114,7 +107,7 @@ fn endpoint_override(args: &Cli) -> Option<String> {
             if address.contains("://") {
                 address.clone()
             } else {
-                format!("http://{address}")
+                format!("udp://{address}")
             }
         })
     })
@@ -138,14 +131,6 @@ fn save_config(
     if options.show {
         return show_config(&config);
     }
-    anyhow::ensure!(
-        args.token.is_none(),
-        "save a token-file reference with --token-file; raw tokens are never written to TOML"
-    );
-    anyhow::ensure!(
-        !(options.clear_token && args.token_file.is_some()),
-        "choose --clear-token or --token-file"
-    );
     let mut profile = config
         .cameras
         .get(&options.camera_name)
@@ -153,16 +138,6 @@ fn save_config(
         .unwrap_or_default();
     if let Some(endpoint) = endpoint_override(args) {
         profile.endpoint = endpoint;
-    }
-    if let Some(token) = &args.token_file {
-        profile.token_file = Some(if token.is_absolute() {
-            token.clone()
-        } else {
-            std::env::current_dir()?.join(token)
-        });
-    }
-    if options.clear_token {
-        profile.token_file = None;
     }
     config.cameras.insert(options.camera_name.clone(), profile);
     config.save(path)?;
@@ -179,25 +154,11 @@ fn show_config(config: &ClientConfig) -> Result<()> {
     Ok(())
 }
 
-fn connect(args: &Cli, mut profile: CameraProfile, path: &Path) -> Result<IrisClient> {
+fn connect(args: &Cli, mut profile: CameraProfile) -> Result<IrisClient> {
     if let Some(endpoint) = endpoint_override(args) {
         profile.endpoint = endpoint;
     }
-    if let Some(token) = &args.token_file {
-        profile.token_file = Some(if token.is_absolute() {
-            token.clone()
-        } else {
-            std::env::current_dir()?.join(token)
-        });
-    }
-    if args.token.is_some() {
-        profile.token_file = None;
-    }
-    let mut client = profile.client(path.parent().unwrap_or_else(|| Path::new(".")))?;
-    if let Some(token) = &args.token {
-        client = client.with_token(token)?;
-    }
-    Ok(client)
+    profile.client()
 }
 
 #[tokio::main]
@@ -219,7 +180,7 @@ async fn main() -> Result<()> {
         _ => config.cameras.get("default").cloned().unwrap_or_default(),
     };
     let endpoint = endpoint_override(&args).unwrap_or_else(|| profile.endpoint.clone());
-    let client = connect(&args, profile, &path)?;
+    let client = connect(&args, profile)?;
     if matches!(
         &args.command,
         Command::Ping { .. }
